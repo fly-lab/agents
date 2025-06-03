@@ -8,8 +8,9 @@
     "check:test": "npm run check:test:workers && npm run check:test:react",
     "check:test:workers": "vitest -r src/tests --watch false",
     "check:test:react": "vitest -r src/react-tests --watch false",
+    "test": "npm run test:client && npm run test:server",
     "test:client": "vitest -r src/tests/client",
-    "test:server": "vitest -r src/tests/client",
+    "test:server": "vitest -r src/tests/server",
     "test:react": "vitest -r src/react-tests",
     "evals": "(cd evals; evalite)",
     "build": "tsx ./scripts/build.ts"
