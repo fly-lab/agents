@@ -209,7 +209,98 @@ describe("McpClient Agent", () => {
     expect(Object.values(mcpsPostAuth.servers)[0].state).toBe("ready");
     expect(mcpsPostAuth.tools).toHaveLength(2);
 
+    // Test a few subsequent disconnections without auth to verify that we don't lose track of the client ID
     await agent.disconnectMCPServers();
+    let mcpsPostDisconnect2: MCPServersState = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostDisconnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostDisconnect2.servers)[0].state).toBe(
+      "disconnected"
+    );
+    expect(mcpsPostDisconnect2.tools).toHaveLength(0);
+
+    await agent.connectMCPServers();
+    let mcpsPostConnect2: MCPServersState = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostConnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostConnect2.servers)[0].state).toBe("ready");
+    expect(mcpsPostConnect2.tools).toHaveLength(2);
+
+    await agent.disconnectMCPServers();
+    mcpsPostDisconnect2 = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostDisconnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostDisconnect2.servers)[0].state).toBe(
+      "disconnected"
+    );
+    expect(mcpsPostDisconnect2.tools).toHaveLength(0);
+
+    await agent.connectMCPServers();
+    mcpsPostConnect2 = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostConnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostConnect2.servers)[0].state).toBe("ready");
+    expect(mcpsPostConnect2.tools).toHaveLength(2);
+  });
+
+  it("connects to oauth authenticated SSE server - multiple disconnects", async () => {
+    const { agent } = getAgent();
+    await agent.addMcpServer(
+      "oauth",
+      "http://localhost:8790/sse",
+      "http://localhost:8787"
+    );
+
+    const mcps: MCPServersState = await agent.getMcpServers();
+    expect(Object.entries(mcps.servers)).toHaveLength(1);
+    expect(mcps.tools).toHaveLength(0);
+    const pendingAuth = Object.values(mcps.servers)[0];
+    expect(pendingAuth.state).toBe("authenticating");
+
+    // Go to server /authorize URL
+    expect(pendingAuth.auth_url).toBeTruthy();
+    const authorizeReq = await fetch(pendingAuth.auth_url!, {
+      redirect: "manual",
+    });
+    expect(authorizeReq.status).toBe(302);
+    const redirectUrl = authorizeReq.headers.get("Location");
+    expect(redirectUrl).toBeTruthy();
+
+    // Mock redirect callback to agent
+    const res = await worker.fetch(new Request(redirectUrl!), env);
+    expect(res.ok).toBeTruthy();
+    expect(res.status).toBe(200);
+    const mcpsPostAuth: MCPServersState = await agent.getMcpServers();
+
+    // assert connection
+    expect(Object.entries(mcpsPostAuth.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostAuth.servers)[0].state).toBe("ready");
+    expect(mcpsPostAuth.tools).toHaveLength(2);
+
+    // Test a few subsequent disconnections without auth to verify that we don't lose track of the client ID
+    await agent.disconnectMCPServers();
+    let mcpsPostDisconnect2: MCPServersState = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostDisconnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostDisconnect2.servers)[0].state).toBe(
+      "disconnected"
+    );
+    expect(mcpsPostDisconnect2.tools).toHaveLength(0);
+
+    await agent.connectMCPServers();
+    let mcpsPostConnect2: MCPServersState = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostConnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostConnect2.servers)[0].state).toBe("ready");
+    expect(mcpsPostConnect2.tools).toHaveLength(2);
+
+    await agent.disconnectMCPServers();
+    mcpsPostDisconnect2 = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostDisconnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostDisconnect2.servers)[0].state).toBe(
+      "disconnected"
+    );
+    expect(mcpsPostDisconnect2.tools).toHaveLength(0);
+
+    await agent.connectMCPServers();
+    mcpsPostConnect2 = await agent.getMcpServers();
+    expect(Object.entries(mcpsPostConnect2.servers)).toHaveLength(1);
+    expect(Object.values(mcpsPostConnect2.servers)[0].state).toBe("ready");
+    expect(mcpsPostConnect2.tools).toHaveLength(2);
   });
 });
 

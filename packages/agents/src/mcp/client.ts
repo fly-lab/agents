@@ -106,6 +106,8 @@ export class MCPClientManager {
 
     return {
       id,
+      // if we didn't refresh the auth flow, just reuse the old oauthClientId
+      clientId: options.reconnect?.oauthClientId,
     };
   }
 
