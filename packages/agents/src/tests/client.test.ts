@@ -1,4 +1,4 @@
-import { expect, describe, it, vi } from "vitest";
+import { expect, describe, it, vi, beforeEach, afterEach } from "vitest";
 import { AgentClient, agentFetch, camelCaseToKebabCase } from "../client.ts";
 
 class MockWebSocket {
@@ -444,6 +444,17 @@ describe("AgentClient", () => {
 });
 
 describe("agentFetch", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("OK", { status: 200 }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("should make HTTP requests to agents", async () => {
     const response = await agentFetch(
       {

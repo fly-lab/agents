@@ -3,59 +3,67 @@ import { MCPClientManager, getNamespacedData } from "../mcp/client";
 import { MCPClientConnection } from "../mcp/client-connection";
 import type { AgentsOAuthProvider } from "../mcp/do-oauth-client-provider";
 
-class MockMCPClientConnection {
-  url: URL;
-  options: unknown;
-  connectionState = "connecting";
-  tools: unknown[] = [];
-  prompts: unknown[] = [];
-  resources: unknown[] = [];
-  resourceTemplates: unknown[] = [];
-  serverCapabilities: unknown = undefined;
-  client = {
-    close: vi.fn().mockResolvedValue(undefined),
-    callTool: vi.fn().mockResolvedValue({
-      isError: false,
-      content: [{ text: "Tool result" }]
-    }),
-    readResource: vi.fn().mockResolvedValue({ content: "Resource content" }),
-    getPrompt: vi
-      .fn()
-      .mockResolvedValue({ messages: [{ role: "user", content: "Prompt" }] })
-  };
-  init = vi.fn().mockImplementation(async (code?: string) => {
-    if (code === "fail_auth") {
-      this.connectionState = "authenticating";
-      return;
-    }
-    if (code === "throw_error") {
-      this.connectionState = "failed";
-      throw new Error("Connection failed");
-    }
-    this.connectionState = "ready";
-    this.serverCapabilities = { tools: {}, prompts: {}, resources: {} };
-    this.tools = [
-      {
-        name: "test-tool",
-        description: "A test tool",
-        inputSchema: { type: "object" }
-      }
-    ];
-    this.prompts = [{ name: "test-prompt", description: "A test prompt" }];
-    this.resources = [{ uri: "test://resource", name: "test-resource" }];
-    this.resourceTemplates = [
-      { uriTemplate: "test://resource/{id}", name: "test-template" }
-    ];
-  });
-
-  constructor(url: URL, _info: unknown, options: unknown) {
-    this.url = url;
-    this.options = options;
-  }
-}
-
 vi.mock("../mcp/client-connection", () => ({
-  MCPClientConnection: MockMCPClientConnection
+  MCPClientConnection: vi
+    .fn()
+    .mockImplementation((url: URL, _info: unknown, options: unknown) => {
+      const instance = {
+        url,
+        options,
+        connectionState: "connecting",
+        tools: [] as unknown[],
+        prompts: [] as unknown[],
+        resources: [] as unknown[],
+        resourceTemplates: [] as unknown[],
+        serverCapabilities: undefined as unknown,
+        client: {
+          close: vi.fn().mockResolvedValue(undefined),
+          callTool: vi.fn().mockResolvedValue({
+            isError: false,
+            content: [{ text: "Tool result" }]
+          }),
+          readResource: vi
+            .fn()
+            .mockResolvedValue({ content: "Resource content" }),
+          getPrompt: vi.fn().mockResolvedValue({
+            messages: [{ role: "user", content: "Prompt" }]
+          })
+        },
+        init: vi.fn().mockImplementation(async (code?: string) => {
+          if (code === "fail_auth") {
+            instance.connectionState = "authenticating";
+            return;
+          }
+          if (code === "throw_error") {
+            instance.connectionState = "failed";
+            throw new Error("Connection failed");
+          }
+          instance.connectionState = "ready";
+          instance.serverCapabilities = {
+            tools: {},
+            prompts: {},
+            resources: {}
+          };
+          instance.tools = [
+            {
+              name: "test-tool",
+              description: "A test tool",
+              inputSchema: { type: "object" }
+            }
+          ];
+          instance.prompts = [
+            { name: "test-prompt", description: "A test prompt" }
+          ];
+          instance.resources = [
+            { uri: "test://resource", name: "test-resource" }
+          ];
+          instance.resourceTemplates = [
+            { uriTemplate: "test://resource/{id}", name: "test-template" }
+          ];
+        })
+      };
+      return instance;
+    })
 }));
 
 vi.mock("nanoid", () => ({
