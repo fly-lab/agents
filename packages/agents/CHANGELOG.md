@@ -1,5 +1,29 @@
 # @cloudflare/agents
 
+## 0.0.106
+
+### Patch Changes
+
+- [#359](https://github.com/cloudflare/agents/pull/359) [`14bb798`](https://github.com/cloudflare/agents/commit/14bb798a1f79ef4052a9134dc5f5a4baee042812) Thanks [@ghostwriternr](https://github.com/ghostwriternr)! - Fix email routing to be case-insensitive for agent names
+
+## 0.0.105
+
+### Patch Changes
+
+- [#354](https://github.com/cloudflare/agents/pull/354) [`f31397c`](https://github.com/cloudflare/agents/commit/f31397cb7f8b67fc736faece51364edeaf52e5a0) Thanks [@jahands](https://github.com/jahands)! - fix: dequeue items in DB after each task is complete
+
+  Prevents a single failure from causing all items in the queue from being retried (including previously processed items that were successful).
+
+## 0.0.104
+
+### Patch Changes
+
+- [#319](https://github.com/cloudflare/agents/pull/319) [`e48e5f9`](https://github.com/cloudflare/agents/commit/e48e5f928030e3cc8d8a73cfa8783354be0b7648) Thanks [@threepointone](https://github.com/threepointone)! - add lightweight .queue
+
+- [#352](https://github.com/cloudflare/agents/pull/352) [`0bb74b8`](https://github.com/cloudflare/agents/commit/0bb74b89db99c7c31a1b7a9a35e0f2aa9814962d) Thanks [@threepointone](https://github.com/threepointone)! - email adaptor
+
+- [#345](https://github.com/cloudflare/agents/pull/345) [`c5e3a32`](https://github.com/cloudflare/agents/commit/c5e3a324b16c75ace2b48a5842a2755546db4539) Thanks [@whoiskatrin](https://github.com/whoiskatrin)! - Add automatic context wrapping for custom Agent methods
+
 ## 0.0.103
 
 ### Patch Changes
@@ -353,7 +377,6 @@
 - [#140](https://github.com/cloudflare/agents/pull/140) [`2f5cb3a`](https://github.com/cloudflare/agents/commit/2f5cb3ac4a9fbb9dc79b137b74336681f60be5a0) Thanks [@cmsparks](https://github.com/cmsparks)! - Remote MCP Client with auth support
 
   This PR adds:
-
   - Support for authentication for MCP Clients (Via a DO based auth provider)
   - Some improvements to the client API per #135
   - A more in depth example of MCP Client, which allows you to add any number of remote MCP servers with or without auth
@@ -443,7 +466,6 @@
 - [#107](https://github.com/cloudflare/agents/pull/107) [`4f3dfc7`](https://github.com/cloudflare/agents/commit/4f3dfc710797697aedaa29cef64923533a2cb071) Thanks [@threepointone](https://github.com/threepointone)! - update deps, allow sub/path/prefix, AND_BINDINGS_LIKE_THIS
 
   of note,
-
   - the partyserver update now allows for prefixes that/have/sub/paths
   - bindings THAT_LOOK_LIKE_THIS are correctly converted to kebabcase now
 
@@ -506,7 +528,6 @@
 ### Patch Changes
 
 - [#85](https://github.com/cloudflare/agents/pull/85) [`acbc34e`](https://github.com/cloudflare/agents/commit/acbc34e0122835fbeae3a18b88932cc1b0a1802d) Thanks [@threepointone](https://github.com/threepointone)! - Add RPC support with `unstable_callable` decorator for method exposure. This feature enables:
-
   - Remote procedure calls from clients to agents
   - Method decoration with `@unstable_callable` to expose agent methods
   - Support for both regular and streaming RPC calls
