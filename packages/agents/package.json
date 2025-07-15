@@ -15,6 +15,10 @@
   },
   "description": "A home for your AI agents",
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.1.8",
+    "jsdom": "^26.1.0",
     "react": "*",
     "vitest-browser-react": "^1.0.0"
   },

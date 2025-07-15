@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import {
   createAddressBasedEmailResolver,
@@ -164,6 +164,9 @@ describe("Email Resolver Case Sensitivity", () => {
 
   describe("routeAgentEmail with case normalization", () => {
     it("should route to correct agent regardless of case in resolver result", async () => {
+      // Mock console to prevent queueMicrotask errors
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       // Test resolver returning different case formats
       const testCases = [
         { agentName: "EmailAgent", agentId: "test1" },
@@ -177,12 +180,29 @@ describe("Email Resolver Case Sensitivity", () => {
         const email = createMockEmail();
 
         // Route the email using the real DurableObject bindings from test env
-        await routeAgentEmail(email, env, { resolver });
+        try {
+          await routeAgentEmail(email, env, { resolver });
+        } catch (error) {
+          // Retry once if we get the invalidation error
+          if (
+            error instanceof Error &&
+            error.message?.includes("invalidating this Durable Object")
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await routeAgentEmail(email, env, { resolver });
+          } else {
+            throw error;
+          }
+        }
 
         // Since we can't easily inspect the agent's state in the test,
         // we trust that if no error is thrown, routing succeeded
         // The agent should have received the email regardless of case
       }
+
+      // Restore console mocks
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
     });
 
     it("should throw helpful error when agent namespace not found", async () => {

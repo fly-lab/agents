@@ -4,6 +4,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "class_name": "TestAgent",
+        "name": "TEST_AGENT"
+      },
+      {
         "class_name": "TestMcpAgent",
         "name": "MCP_OBJECT"
       },
@@ -25,6 +29,7 @@
   "migrations": [
     {
       "new_sqlite_classes": [
+        "TestAgent",
         "TestMcpAgent",
         "TestEmailAgent",
         "TestCaseSensitiveAgent",
