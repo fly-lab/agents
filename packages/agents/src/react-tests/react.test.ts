@@ -137,7 +137,9 @@ describe("useAgent", () => {
 
     it("should handle state updates from server", () => {
       const onStateUpdate = vi.fn();
-      renderHook(() => useAgent({ agent: "TestAgent", onStateUpdate }));
+      const { result } = renderHook(() =>
+        useAgent({ agent: "TestAgent", onStateUpdate })
+      );
 
       const serverState = { count: 10, serverData: true };
       const message = new MessageEvent("message", {
@@ -290,8 +292,8 @@ describe("useAgent", () => {
       let finalResult: unknown;
 
       const callPromise = result.current.call("streamingMethod", [], {
-        onChunk: (chunk) => chunks.push(chunk),
-        onDone: (result) => {
+        onChunk: (chunk: unknown) => chunks.push(chunk),
+        onDone: (result: unknown) => {
           finalResult = result;
         }
       });
@@ -619,7 +621,7 @@ describe("useAgent", () => {
 
     it("should handle re-renders without recreating connections", () => {
       const { rerender } = renderHook(
-        ({ name }) => useAgent({ agent: "TestAgent", name }),
+        ({ name }: { name: string }) => useAgent({ agent: "TestAgent", name }),
         { initialProps: { name: "instance1" } }
       );
 

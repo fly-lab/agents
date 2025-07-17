@@ -134,7 +134,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     );
 
     expect(response.status).toBe(400);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
     expectErrorResponse(
       errorData,
       -32600,
@@ -162,7 +162,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     const response = await sendPostRequest(ctx, baseUrl, batchInitMessages);
 
     expect(response.status).toBe(400);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
     expectErrorResponse(
       errorData,
       -32600,
@@ -278,7 +278,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     );
 
     expect(response.status).toBe(404);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
     expectErrorResponse(errorData, -32001, /Session not found/);
   });
 
@@ -299,7 +299,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     const response = await worker.fetch(request, env, ctx);
 
     expect(response.status).toBe(406);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
 
     expectErrorResponse(
       errorData,
@@ -325,7 +325,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     const response = await worker.fetch(request, env, ctx);
 
     expect(response.status).toBe(415);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
     expectErrorResponse(
       errorData,
       -32000,
@@ -410,7 +410,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     const response = await worker.fetch(request, env, ctx);
 
     expect(response.status).toBe(400);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
     expectErrorResponse(errorData, -32700, /Parse error/);
   });
 
@@ -428,7 +428,7 @@ describe("McpAgent Streamable HTTP Transport", () => {
     );
 
     expect(response.status).toBe(400);
-    const errorData = await response.json();
+    const errorData = (await response.json()) as unknown;
     expect(errorData).toMatchObject({
       error: expect.anything(),
       jsonrpc: "2.0"

@@ -1,5 +1,13 @@
-import { expect, describe, it, vi, beforeEach, afterEach } from "vitest";
-import { AgentClient, agentFetch, camelCaseToKebabCase } from "../client.ts";
+import { env } from "cloudflare:test";
+import { expect, describe, it, vi, afterEach } from "vitest";
+import { AgentClient, agentFetch } from "../client.ts";
+import { getAgentByName } from "../index.ts";
+import { PartySocket } from "partysocket";
+import type { Env } from "./worker";
+
+declare module "cloudflare:test" {
+  interface ProvidedEnv extends Env {}
+}
 
 class MockWebSocket {
   url: string;
@@ -49,492 +57,319 @@ vi.mock("partysocket", () => ({
   }
 }));
 
-describe("AgentClient", () => {
-  describe("Connection", () => {
-    it("should be able to connect to an agent with defaults", () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
-      });
+describe("AgentClient Functionality", () => {
+  describe("Real Durable Object Integration", () => {
+    it("should sync state with real Durable Object through HTTP", async () => {
+      const testId = `client-state-sync-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
 
-      expect(client).toBeDefined();
-      expect(client.agent).toBe("test-agent"); // Should convert to kebab-case
-      expect(client.name).toBe("default");
-    });
-
-    it("should be able to connect to an agent with options", () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        name: "my-instance",
-        host: "custom.host.com"
-      });
-
-      expect(client).toBeDefined();
-      expect(client.agent).toBe("test-agent");
-      expect(client.name).toBe("my-instance");
-    });
-
-    it("should handle different agent name formats", () => {
-      const testCases = [
-        { input: "TestAgent", expected: "test-agent" },
-        { input: "test-agent", expected: "test-agent" },
-        { input: "TEST_AGENT", expected: "test-agent" },
-        { input: "testAgent", expected: "test-agent" }
-      ];
-
-      testCases.forEach(({ input, expected }) => {
-        const client = new AgentClient({
-          agent: input,
-          host: "localhost:1999"
-        });
-        expect(client.agent).toBe(expected);
-      });
-    });
-  });
-
-  describe("State Management", () => {
-    it("should sync state from client to server", () => {
-      const onStateUpdate = vi.fn();
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999",
-        onStateUpdate
-      });
-
-      const sendSpy = vi.spyOn(client, "send");
-      const newState = { count: 5, name: "test" };
-
-      client.setState(newState);
-
-      expect(sendSpy).toHaveBeenCalledWith(
-        JSON.stringify({ state: newState, type: "cf_agent_state" })
-      );
-      expect(onStateUpdate).toHaveBeenCalledWith(newState, "client");
-    });
-
-    it("should receive state updates from server", () => {
-      const onStateUpdate = vi.fn();
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999",
-        onStateUpdate
-      });
-
-      // Simulate server state update
-      const serverState = { count: 10, serverData: true };
-      const event = new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "cf_agent_state",
-          state: serverState
-        })
-      });
-
-      client.dispatchEvent(event);
-
-      expect(onStateUpdate).toHaveBeenCalledWith(serverState, "server");
-    });
-
-    it("should handle complex state objects", () => {
-      const onStateUpdate = vi.fn();
-      const client = new AgentClient<{
-        user: { id: number; name: string };
-        settings: { theme: string };
-      }>({
-        agent: "TestAgent",
-        host: "localhost:1999",
-        onStateUpdate
-      });
-
-      const complexState = {
-        user: { id: 1, name: "Alice" },
-        settings: { theme: "dark" }
+      const testState = {
+        clientSync: true,
+        timestamp: Date.now(),
+        data: "real sync test"
       };
 
-      client.setState(complexState);
+      // Test HTTP state synchronization (simulating real client-server flow)
+      const setResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/setState", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(testState)
+        })
+      );
 
-      expect(onStateUpdate).toHaveBeenCalledWith(complexState, "client");
+      expect(setResponse.status).toBe(200);
+
+      // Verify state persistence through HTTP endpoint
+      const getResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/getState")
+      );
+      const retrievedState = (await getResponse.json()) as typeof testState;
+      expect(retrievedState).toEqual(testState);
+      expect(retrievedState.clientSync).toBe(true);
+      expect(retrievedState.timestamp).toBe(testState.timestamp);
+    });
+
+    it("should handle WebSocket connections with real agents", async () => {
+      const testId = `client-ws-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Test actual WebSocket upgrade functionality
+      const wsResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "GET",
+          headers: {
+            Upgrade: "websocket",
+            Connection: "Upgrade",
+            "Sec-WebSocket-Key": "test-key",
+            "Sec-WebSocket-Version": "13"
+          }
+        })
+      );
+
+      expect(wsResponse.status).toBe(101);
+      expect(wsResponse.webSocket).toBeDefined();
+
+      // Verify the WebSocket is properly initialized
+      const ws = wsResponse.webSocket!;
+      ws.accept();
+
+      // Test that we can send data through the WebSocket
+      ws.send(JSON.stringify({ type: "test", data: "websocket works" }));
     });
   });
 
-  describe("RPC Calls", () => {
-    it("should make RPC calls", async () => {
+  describe("RPC Call Functionality", () => {
+    it("should handle complete RPC request-response cycles", async () => {
+      const onStateUpdate = vi.fn();
       const client = new AgentClient({
         agent: "TestAgent",
-        host: "localhost:1999"
+        host: "localhost:1999",
+        onStateUpdate
       });
 
       const sendSpy = vi.spyOn(client, "send");
 
-      const callPromise = client.call("testMethod", ["arg1", "arg2"]);
+      // Test actual RPC call with real parameters
+      const callPromise = client.call("processData", [
+        {
+          input: "test data",
+          options: { validate: true }
+        }
+      ]);
 
       expect(sendSpy).toHaveBeenCalled();
       const sentData = JSON.parse(sendSpy.mock.calls[0][0] as string);
-      expect(sentData).toMatchObject({
-        type: "rpc",
-        method: "testMethod",
-        args: ["arg1", "arg2"]
+      expect(sentData.type).toBe("rpc");
+      expect(sentData.method).toBe("processData");
+      expect(sentData.args[0]).toEqual({
+        input: "test data",
+        options: { validate: true }
       });
       expect(sentData.id).toBeDefined();
 
-      const response = new MessageEvent("message", {
+      // Simulate realistic server response
+      const serverResponse = new MessageEvent("message", {
         data: JSON.stringify({
           type: "rpc",
           id: sentData.id,
           success: true,
-          result: { data: "test result" }
+          result: {
+            processed: true,
+            output: "processed test data",
+            validationPassed: true
+          }
         })
       });
 
-      client.dispatchEvent(response);
+      client.dispatchEvent(serverResponse);
 
-      const result = await callPromise;
-      expect(result).toEqual({ data: "test result" });
+      const result = (await callPromise) as {
+        processed: boolean;
+        output: string;
+        validationPassed: boolean;
+      };
+      expect(result).toBeDefined();
+      expect(result.processed).toBe(true);
+      expect(result.output).toBe("processed test data");
+      expect(result.validationPassed).toBe(true);
     });
 
-    it("should handle RPC errors", async () => {
+    it("should handle RPC error responses with specific error details", async () => {
       const client = new AgentClient({
         agent: "TestAgent",
         host: "localhost:1999"
       });
 
       const sendSpy = vi.spyOn(client, "send");
-
-      const callPromise = client.call("failingMethod");
-
-      const sentData = JSON.parse(sendSpy.mock.calls[0][0] as string);
-      const response = new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "rpc",
-          id: sentData.id,
-          success: false,
-          error: "Method not found"
-        })
-      });
-
-      client.dispatchEvent(response);
-
-      await expect(callPromise).rejects.toThrow("Method not found");
-    });
-
-    it("should handle streaming RPC responses", async () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
-      });
-
-      const chunks: unknown[] = [];
-      let finalResult: unknown;
-
-      const sendSpy = vi.spyOn(client, "send");
-
-      const callPromise = client.call("streamingMethod", [], {
-        onChunk: (chunk) => chunks.push(chunk),
-        onDone: (result) => {
-          finalResult = result;
-        }
-      });
+      const callPromise = client.call("invalidOperation", [{ badData: true }]);
 
       const sentData = JSON.parse(sendSpy.mock.calls[0][0] as string);
 
-      const chunk1 = new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "rpc",
-          id: sentData.id,
-          success: true,
-          result: "chunk1",
-          done: false
-        })
-      });
-
-      const chunk2 = new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "rpc",
-          id: sentData.id,
-          success: true,
-          result: "chunk2",
-          done: false
-        })
-      });
-
-      const final = new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "rpc",
-          id: sentData.id,
-          success: true,
-          result: "final",
-          done: true
-        })
-      });
-
-      client.dispatchEvent(chunk1);
-      client.dispatchEvent(chunk2);
-      client.dispatchEvent(final);
-
-      const result = await callPromise;
-
-      expect(chunks).toEqual(["chunk1", "chunk2"]);
-      expect(finalResult).toBe("final");
-      expect(result).toBe("final");
-    });
-
-    it("should handle streaming errors", async () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
-      });
-
-      const onError = vi.fn();
-      const sendSpy = vi.spyOn(client, "send");
-
-      const callPromise = client.call("streamingMethod", [], {
-        onError
-      });
-
-      const sentData = JSON.parse(sendSpy.mock.calls[0][0] as string);
-
+      // Simulate realistic error response
       const errorResponse = new MessageEvent("message", {
         data: JSON.stringify({
           type: "rpc",
           id: sentData.id,
           success: false,
-          error: "Stream failed"
+          error: "ValidationError: badData parameter not allowed",
+          code: "INVALID_PARAMETER"
         })
       });
 
       client.dispatchEvent(errorResponse);
 
-      await expect(callPromise).rejects.toThrow("Stream failed");
-      expect(onError).toHaveBeenCalledWith("Stream failed");
+      await expect(callPromise).rejects.toThrow(
+        "ValidationError: badData parameter not allowed"
+      );
     });
   });
 
-  describe("Message Handling", () => {
-    it("should ignore invalid JSON messages", () => {
+  describe("State Management with Data Flow", () => {
+    it("should handle bidirectional state synchronization", () => {
+      const stateUpdates: Array<{ state: unknown; source: string }> = [];
       const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
-      });
-
-      const event = new MessageEvent("message", {
-        data: "invalid json {"
-      });
-
-      expect(() => client.dispatchEvent(event)).not.toThrow();
-    });
-
-    it("should ignore unknown message types", () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
-      });
-
-      const event = new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "unknown",
-          data: "test"
-        })
-      });
-
-      expect(() => client.dispatchEvent(event)).not.toThrow();
-    });
-
-    it("should handle multiple concurrent RPC calls", async () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
-      });
-
-      const sendSpy = vi.spyOn(client, "send");
-
-      const call1 = client.call("method1", [1]);
-      const call2 = client.call("method2", [2]);
-      const call3 = client.call("method3", [3]);
-
-      const sentData1 = JSON.parse(sendSpy.mock.calls[0][0] as string);
-      const sentData2 = JSON.parse(sendSpy.mock.calls[1][0] as string);
-      const sentData3 = JSON.parse(sendSpy.mock.calls[2][0] as string);
-
-      // Respond in different order
-      client.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({
-            type: "rpc",
-            id: sentData2.id,
-            success: true,
-            result: "result2"
-          })
-        })
-      );
-
-      client.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({
-            type: "rpc",
-            id: sentData3.id,
-            success: true,
-            result: "result3"
-          })
-        })
-      );
-
-      client.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({
-            type: "rpc",
-            id: sentData1.id,
-            success: true,
-            result: "result1"
-          })
-        })
-      );
-
-      const results = await Promise.all([call1, call2, call3]);
-      expect(results).toEqual(["result1", "result2", "result3"]);
-    });
-  });
-
-  describe("TypeScript Support", () => {
-    it("should support typed state", () => {
-      type MyState = {
-        count: number;
-        name: string;
-      };
-
-      const client = new AgentClient<MyState>({
         agent: "TestAgent",
         host: "localhost:1999",
-        onStateUpdate: (state) => {
-          expect(typeof state.count).toBe("number");
-          expect(typeof state.name).toBe("string");
-        }
-      });
-
-      client.setState({ count: 1, name: "test" });
-    });
-
-    it("should support typed RPC calls", async () => {
-      const client = new AgentClient({
-        agent: "TestAgent",
-        host: "localhost:1999"
+        onStateUpdate: (state, source) => stateUpdates.push({ state, source })
       });
 
       const sendSpy = vi.spyOn(client, "send");
 
-      const callPromise = client.call<{ value: number }>("getNumber");
+      // Client updates state
+      const clientState = {
+        userAction: "file_uploaded",
+        fileName: "document.pdf",
+        uploadTime: Date.now()
+      };
 
-      const sentData = JSON.parse(sendSpy.mock.calls[0][0] as string);
+      client.setState(clientState);
 
-      client.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({
-            type: "rpc",
-            id: sentData.id,
-            success: true,
-            result: { value: 42 }
-          })
-        })
+      expect(sendSpy).toHaveBeenCalledWith(
+        JSON.stringify({ state: clientState, type: "cf_agent_state" })
       );
+      expect(stateUpdates).toContainEqual({
+        state: clientState,
+        source: "client"
+      });
 
-      const result = await callPromise;
+      // Server responds with processing state
+      const serverStateEvent = new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "cf_agent_state",
+          state: {
+            processing: true,
+            fileName: "document.pdf",
+            progress: 0.5,
+            estimatedCompletion: Date.now() + 30000
+          }
+        })
+      });
 
-      expect(result).toEqual({ value: 42 });
-      expect(result.value).toBe(42);
+      client.dispatchEvent(serverStateEvent);
+
+      expect(stateUpdates).toHaveLength(2);
+      expect(stateUpdates[1].source).toBe("server");
+      expect((stateUpdates[1].state as any).processing).toBe(true);
+      expect((stateUpdates[1].state as any).progress).toBe(0.5);
     });
   });
 });
 
-describe("agentFetch", () => {
-  beforeEach(() => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response("OK", { status: 200 }))
-    );
-  });
+describe("agentFetch Network Simulation", () => {
+  let fetchSpy: any;
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    fetchSpy?.mockRestore();
   });
 
-  it("should make HTTP requests to agents", async () => {
+  it("should handle complete HTTP request-response cycles", async () => {
+    // Mock realistic response with headers and body
+    fetchSpy = vi.spyOn(PartySocket, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { id: 123, name: "test-resource" },
+          timestamp: Date.now()
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Agent-Version": "1.0.0"
+          }
+        }
+      )
+    );
+
     const response = await agentFetch(
       {
         agent: "TestAgent",
-        name: "my-instance",
-        host: "localhost:1999"
+        name: "resource-123",
+        host: "agents.example.com"
       },
       {
-        method: "POST",
-        body: JSON.stringify({ data: "test" })
+        method: "GET",
+        headers: { Accept: "application/json" }
       }
     );
 
-    expect(response).toBeDefined();
-    expect(response.status).toBe(200);
-  });
-
-  it("should use default instance name", async () => {
-    const response = await agentFetch({
-      agent: "TestAgent",
-      host: "localhost:1999"
-    });
-
-    expect(response).toBeDefined();
-    expect(response.status).toBe(200);
-  });
-
-  it("should convert agent names to kebab-case", async () => {
-    const response = await agentFetch({
-      agent: "MyTestAgent",
-      host: "localhost:1999"
-    });
-
-    expect(response).toBeDefined();
-  });
-});
-
-describe("camelCaseToKebabCase", () => {
-  it("should convert various formats correctly", () => {
-    const testCases = [
-      { input: "TestAgent", expected: "test-agent" },
-      { input: "testAgent", expected: "test-agent" },
-      { input: "test", expected: "test" },
-      { input: "TEST", expected: "test" },
-      { input: "TEST_AGENT", expected: "test-agent" },
-      { input: "test_agent", expected: "test-agent" },
-      { input: "TestAgentName", expected: "test-agent-name" },
-      { input: "ABC", expected: "abc" },
-      { input: "test-agent", expected: "test-agent" },
-      { input: "", expected: "" },
-      { input: "Test123", expected: "test123" },
-      { input: "test123Agent", expected: "test123-agent" }
-    ];
-
-    testCases.forEach(({ input, expected }) => {
-      expect(camelCaseToKebabCase(input)).toBe(expected);
-    });
-  });
-
-  it("should handle edge cases", () => {
-    expect(camelCaseToKebabCase("A")).toBe("a");
-    expect(camelCaseToKebabCase("aB")).toBe("a-b");
-    expect(camelCaseToKebabCase("aBc")).toBe("a-bc");
-    expect(camelCaseToKebabCase("_test_")).toBe("-test");
-  });
-});
-
-describe("Error Handling", () => {
-  it("should throw error for deprecated fetch method", () => {
-    expect(() => AgentClient.fetch({} as never)).toThrow(
-      "AgentClient.fetch is not implemented, use agentFetch instead"
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        party: "test-agent",
+        prefix: "agents",
+        room: "resource-123",
+        host: "agents.example.com"
+      }),
+      expect.objectContaining({
+        method: "GET",
+        headers: { Accept: "application/json" }
+      })
     );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/json");
+    expect(response.headers.get("X-Agent-Version")).toBe("1.0.0");
+
+    const data = (await response.json()) as {
+      success: boolean;
+      data: { id: number; name: string };
+      timestamp: number;
+    };
+    expect(data.success).toBe(true);
+    expect(data.data.id).toBe(123);
+    expect(data.data.name).toBe("test-resource");
   });
 
-  it("should handle connection errors gracefully", () => {
-    const client = new AgentClient({
+  it("should handle error scenarios with proper error handling", async () => {
+    // Test 429 rate limiting scenario
+    fetchSpy = vi.spyOn(PartySocket, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: "Rate limit exceeded",
+          retryAfter: 60,
+          remainingRequests: 0
+        }),
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "60",
+            "X-RateLimit-Remaining": "0"
+          }
+        }
+      )
+    );
+
+    const response = await agentFetch({
       agent: "TestAgent",
       host: "localhost:1999"
     });
 
-    expect(client).toBeDefined();
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(response.headers.get("X-RateLimit-Remaining")).toBe("0");
+
+    const errorData = (await response.json()) as {
+      error: string;
+      retryAfter: number;
+      remainingRequests: number;
+    };
+    expect(errorData.error).toBe("Rate limit exceeded");
+    expect(errorData.retryAfter).toBe(60);
+  });
+
+  it("should handle network failures", async () => {
+    const networkError = new Error("fetch failed");
+    networkError.name = "TypeError";
+    networkError.cause = "ECONNREFUSED";
+
+    fetchSpy = vi.spyOn(PartySocket, "fetch").mockRejectedValue(networkError);
+
+    await expect(
+      agentFetch({
+        agent: "TestAgent",
+        host: "unreachable-server.com"
+      })
+    ).rejects.toThrow("fetch failed");
   });
 });

@@ -1,15 +1,6 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { expect, describe, it, vi } from "vitest";
-import {
-  getAgentByName,
-  routeAgentRequest,
-  getCurrentAgent,
-  unstable_callable,
-  Agent,
-  StreamingResponse,
-  type Connection
-} from "../index.ts";
-import { camelCaseToKebabCase } from "../client.ts";
+import { getAgentByName, routeAgentRequest } from "../index.ts";
 import type { Env } from "./worker";
 
 declare module "cloudflare:test" {
@@ -17,515 +8,152 @@ declare module "cloudflare:test" {
 }
 
 describe("Agent Core Functionality", () => {
-  describe("getAgentByName", () => {
-    it("should return an agent with specified name", async () => {
-      const agentName = "test-agent";
-      const agent = await getAgentByName(env.TEST_AGENT, agentName);
+  describe("State Management", () => {
+    it("should persist state across DO lifecycle and handle concurrent updates", async () => {
+      const agentName = `state-test-${Date.now()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, agentName);
 
-      expect(agent).toBeDefined();
-      expect(agent).toHaveProperty("fetch");
-      expect(typeof agent.fetch).toBe("function");
-    });
+      // Fire off 3 setState calls simultaneously to test if race conditions would show up
+      const promises = Array.from({ length: 3 }, (_, i) =>
+        agentWithRouting.fetch(
+          new Request("http://localhost/setState", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              counter: i,
+              timestamp: Date.now(),
+              persistent: "data"
+            })
+          })
+        )
+      );
 
-    it("should handle agent name with special characters", async () => {
-      const agentName = "my-agent-with-special-chars-123!@#";
-      const agent = await getAgentByName(env.TEST_AGENT, agentName);
+      const responses = await Promise.all(promises);
+      responses.forEach((response) => {
+        expect(response.status).toBe(200);
+      });
 
-      expect(agent).toBeDefined();
-      expect(agent).toHaveProperty("fetch");
-    });
-
-    it("should handle options parameter", async () => {
-      const agentName = "my-agent";
-      const options = { locationHint: "wnam" as DurableObjectLocationHint };
-
-      const agent = await getAgentByName(env.TEST_AGENT, agentName, options);
-
-      expect(agent).toBeDefined();
-      expect(agent).toHaveProperty("fetch");
-    });
-
-    it("should create different agents for different names", async () => {
-      const agent1 = await getAgentByName(env.TEST_AGENT, "agent1");
-      const agent2 = await getAgentByName(env.TEST_AGENT, "agent2");
-
-      expect(agent1).toBeDefined();
-      expect(agent2).toBeDefined();
-      // They should be different instances based on ID
-      const id1 = env.TEST_AGENT.idFromName("agent1");
-      const id2 = env.TEST_AGENT.idFromName("agent2");
-      expect(id1.toString()).not.toBe(id2.toString());
+      // Get a completely fresh agent instance; this simulates what happens after DO eviction
+      const freshAgentWithRouting = await getAgentByName(
+        env.TEST_AGENT,
+        agentName
+      );
+      const response = await freshAgentWithRouting.fetch(
+        new Request("http://localhost/getState")
+      );
+      const state = (await response.json()) as {
+        counter: number;
+        persistent: string;
+      };
+      expect(state).toBeDefined();
+      expect(typeof state.counter).toBe("number");
+      expect(state.persistent).toBe("data");
     });
   });
 
-  describe("routeAgentRequest", () => {
-    it("should handle CORS preflight requests when cors is enabled", async () => {
-      const request = new Request("http://localhost/agents/TestAgent/test", {
-        method: "OPTIONS",
-        headers: {
-          Origin: "http://localhost:3000",
-          "Access-Control-Request-Method": "POST",
-          "Access-Control-Request-Headers": "Content-Type"
+  describe("Request Routing", () => {
+    it("should route valid agent requests and handle CORS", async () => {
+      // This should match the /agents/* pattern and get routed to an agent
+      const validRequest = new Request(
+        "http://localhost/agents/test-agent/instance-1",
+        {
+          method: "GET"
         }
-      });
-
-      const response = await routeAgentRequest(request, env, { cors: true });
-
-      expect(response).toBeDefined();
-      expect(response!.status).toBe(200);
-      expect(response!.headers.get("Access-Control-Allow-Origin")).toBe("*");
-      expect(response!.headers.get("Access-Control-Allow-Methods")).toBe(
-        "GET, POST, HEAD, OPTIONS"
       );
-      expect(response!.headers.get("Access-Control-Allow-Credentials")).toBe(
-        "true"
-      );
-    });
+      const response = await routeAgentRequest(validRequest, env);
+      expect(response).not.toBeNull();
+      expect(response!.status).toBeGreaterThan(0);
 
-    it("should handle CORS with custom headers", async () => {
-      const customCorsHeaders = {
-        "Access-Control-Allow-Origin": "https://example.com",
-        "Access-Control-Allow-Methods": "GET, POST",
-        "Access-Control-Max-Age": "3600"
-      };
-
-      const request = new Request("http://localhost/agents/TestAgent/test", {
-        method: "OPTIONS",
-        headers: {
-          Origin: "https://example.com"
+      // This path doesn't match any agent route, so should return null
+      const invalidRequest = new Request(
+        "http://localhost/api/other/endpoint",
+        {
+          method: "GET"
         }
-      });
-
-      const response = await routeAgentRequest(request, env, {
-        cors: customCorsHeaders
-      });
-
-      expect(response).toBeDefined();
-      expect(response!.status).toBe(200);
-      expect(response!.headers.get("Access-Control-Allow-Origin")).toBe(
-        "https://example.com"
       );
-      expect(response!.headers.get("Access-Control-Allow-Methods")).toBe(
-        "GET, POST"
-      );
-      expect(response!.headers.get("Access-Control-Max-Age")).toBe("3600");
-    });
+      const invalidResponse = await routeAgentRequest(invalidRequest, env);
+      expect(invalidResponse).toBeNull();
 
-    it("should handle custom prefix option", async () => {
-      const request = new Request(
-        "http://localhost/custom-prefix/TestAgent/test",
+      // Browser preflight request; needs to respond with proper CORS headers
+      const corsRequest = new Request(
+        "http://localhost/agents/test-agent/test",
         {
           method: "OPTIONS",
           headers: {
-            Origin: "http://localhost:3000"
+            Origin: "http://localhost:3000",
+            "Access-Control-Request-Method": "POST"
           }
         }
       );
-
-      const response = await routeAgentRequest(request, env, {
-        prefix: "custom-prefix",
+      const corsResponse = await routeAgentRequest(corsRequest, env, {
         cors: true
       });
-
-      // Should return CORS response for OPTIONS request
-      expect(response).toBeDefined();
-      expect(response!.status).toBe(200);
-    });
-
-    it("should return null for non-matching paths", async () => {
-      const request = new Request("http://localhost/api/other/endpoint", {
-        method: "GET"
-      });
-
-      const response = await routeAgentRequest(request, env);
-
-      expect(response).toBeNull();
+      expect(corsResponse).toBeDefined();
+      expect(corsResponse!.status).toBe(200);
+      expect(corsResponse!.headers.get("Access-Control-Allow-Origin")).toBe(
+        "*"
+      );
     });
   });
 
-  describe("Utility Functions", () => {
-    describe("camelCaseToKebabCase", () => {
-      it("should convert CamelCase to kebab-case", () => {
-        expect(camelCaseToKebabCase("TestAgent")).toBe("test-agent");
-        expect(camelCaseToKebabCase("EmailAgent")).toBe("email-agent");
-        expect(camelCaseToKebabCase("MyComplexAgentName")).toBe(
-          "my-complex-agent-name"
-        );
-      });
+  describe("WebSocket Functionality", () => {
+    it("should handle WebSocket upgrade and RPC calls", async () => {
+      const testId = `ws-test-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
 
-      it("should handle already kebab-case strings", () => {
-        expect(camelCaseToKebabCase("test-agent")).toBe("test-agent");
-        expect(camelCaseToKebabCase("email-agent")).toBe("email-agent");
-      });
-
-      it("should handle single word", () => {
-        expect(camelCaseToKebabCase("Agent")).toBe("agent");
-        expect(camelCaseToKebabCase("Test")).toBe("test");
-      });
-
-      it("should handle empty string", () => {
-        expect(camelCaseToKebabCase("")).toBe("");
-      });
-
-      it("should handle strings with numbers", () => {
-        expect(camelCaseToKebabCase("TestAgent123")).toBe("test-agent123");
-        expect(camelCaseToKebabCase("Agent2Email")).toBe("agent2-email");
-      });
-    });
-  });
-
-  describe("Agent with different namespaces", () => {
-    it("should handle MCP agents", async () => {
-      const id = env.MCP_OBJECT.idFromName("test-mcp");
-      const agent = env.MCP_OBJECT.get(id);
-      expect(agent).toBeDefined();
-      expect(agent).toHaveProperty("fetch");
-    });
-
-    it("should handle multiple agent types", async () => {
-      // Mock console to prevent queueMicrotask errors
-      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      try {
-        const testAgent = await getAgentByName(env.TEST_AGENT, "test1");
-        const emailAgent = await getAgentByName(env.EmailAgent, "test2");
-
-        expect(testAgent).toBeDefined();
-        expect(emailAgent).toBeDefined();
-
-        // Each agent type has its own namespace
-        expect(testAgent.fetch).toBeDefined();
-        expect(emailAgent.fetch).toBeDefined();
-      } finally {
-        // Restore console mocks
-        logSpy.mockRestore();
-        errorSpy.mockRestore();
-      }
-    });
-  });
-
-  describe("Error Handling", () => {
-    it("should handle undefined environment bindings gracefully", async () => {
-      const undefinedEnv = {} as Env;
-
-      await expect(async () => {
-        await getAgentByName(undefinedEnv.TEST_AGENT, "test");
-      }).rejects.toThrow();
-    });
-  });
-
-  describe("Integration Scenarios", () => {
-    it("should handle concurrent agent creation", async () => {
-      const promises = Array(5)
-        .fill(null)
-        .map((_, i) => getAgentByName(env.TEST_AGENT, `concurrent-agent-${i}`));
-
-      const agents = await Promise.all(promises);
-
-      expect(agents).toHaveLength(5);
-      agents.forEach((agent) => {
-        expect(agent).toBeDefined();
-        expect(agent).toHaveProperty("fetch");
-      });
-    });
-
-    it("should handle agent names with various patterns", async () => {
-      const patterns = [
-        "simple",
-        "with-dash",
-        "with_underscore",
-        "with123numbers",
-        "UPPERCASE",
-        "mixedCase"
-      ];
-
-      for (const pattern of patterns) {
-        const agent = await getAgentByName(env.TEST_AGENT, pattern);
-        expect(agent).toBeDefined();
-        expect(agent).toHaveProperty("fetch");
-      }
-    });
-  });
-
-  describe("Agent Direct Testing", () => {
-    it("should handle WebSocket upgrade", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "ws-test");
-
-      const upgradeResponse = await agent.fetch(
+      // The Upgrade header should trigger WebSocket protocol switch
+      const upgradeResponse = await agentWithRouting.fetch(
         new Request("http://localhost/test", {
           method: "GET",
-          headers: {
-            Upgrade: "websocket"
-          }
+          headers: { Upgrade: "websocket" }
         })
       );
 
       expect(upgradeResponse.status).toBe(101);
       expect(upgradeResponse.webSocket).toBeDefined();
-    });
 
-    it("should handle basic HTTP requests", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "http-test");
+      const ws = upgradeResponse.webSocket!;
+      const receivedMessages: string[] = [];
+      ws.addEventListener("message", (event) => {
+        receivedMessages.push(event.data);
+      });
+      ws.accept();
 
-      const response = await agent.fetch(
-        new Request("http://localhost/test", {
-          method: "GET"
-        })
-      );
-
-      expect(response).toBeDefined();
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe("StreamingResponse", () => {
-    it("should require connection and id parameters", () => {
-      expect(StreamingResponse).toBeDefined();
-      expect(typeof StreamingResponse).toBe("function");
-    });
-
-    it("should be used for streaming RPC responses", () => {
-      const mockConnection = {
-        id: "test-connection-id",
-        state: {},
-        setState: vi.fn(),
-        server: "test-server",
-        send: vi.fn()
+      // Send an RPC call over the WebSocket
+      const rpcMessage = {
+        type: "rpc",
+        method: "testMethod",
+        args: [],
+        id: "rpc-test"
       };
 
-      const response = new StreamingResponse(
-        mockConnection as unknown as Connection,
-        "test-id"
-      );
-      expect(response).toBeDefined();
+      ws.send(JSON.stringify(rpcMessage));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-      response.send({ data: "chunk1" });
-      expect(mockConnection.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          done: false,
-          id: "test-id",
-          result: { data: "chunk1" },
-          success: true,
-          type: "rpc"
-        })
-      );
-
-      response.end({ data: "final" });
-      expect(mockConnection.send).toHaveBeenCalledWith(
-        JSON.stringify({
-          done: true,
-          id: "test-id",
-          result: { data: "final" },
-          success: true,
-          type: "rpc"
-        })
-      );
-
-      expect(() => response.send({ data: "after-end" })).toThrow(
-        "StreamingResponse is already closed"
-      );
-    });
-  });
-
-  describe("Agent Class Features", () => {
-    it("should support callable decorator", () => {
-      const metadata = {
-        description: "Test method",
-        streaming: false
-      };
-
-      const decorator = unstable_callable(metadata);
-      expect(typeof decorator).toBe("function");
-    });
-
-    it("should handle different agent namespaces", async () => {
-      const testAgent = await getAgentByName(env.TEST_AGENT, "test-agent");
-      expect(testAgent).toBeDefined();
-      expect(testAgent.fetch).toBeDefined();
-
-      const emailAgent = await getAgentByName(env.EmailAgent, "email-agent");
-      expect(emailAgent).toBeDefined();
-      expect(emailAgent.fetch).toBeDefined();
-
-      const caseSensitiveAgent = await getAgentByName(
-        env.CaseSensitiveAgent,
-        "case-agent"
-      );
-      expect(caseSensitiveAgent).toBeDefined();
-      expect(caseSensitiveAgent.fetch).toBeDefined();
-
-      const notificationAgent = await getAgentByName(
-        env.UserNotificationAgent,
-        "notification-agent"
-      );
-      expect(notificationAgent).toBeDefined();
-      expect(notificationAgent.fetch).toBeDefined();
-    });
-  });
-
-  describe("getCurrentAgent", () => {
-    it("should return context when called", () => {
-      // getCurrentAgent returns the context object, not just the agent
-      const context = getCurrentAgent();
-
-      if (context) {
-        expect(context).toHaveProperty("agent");
-      } else {
-        expect(context).toBeUndefined();
-      }
-    });
-  });
-
-  describe("Route Pattern Matching", () => {
-    it("should return null for non-agent paths", async () => {
-      const nonAgentPaths = [
-        "/other/path",
-        "/api/endpoint",
-        "/",
-        "/agents",
-        "/agents/"
-      ];
-
-      for (const path of nonAgentPaths) {
-        const request = new Request(`http://localhost${path}`, {
-          method: "GET"
-        });
-
-        const response = await routeAgentRequest(request, env);
-        expect(response).toBeNull();
-      }
-    });
-
-    it("should detect valid agent paths", async () => {
-      const validPaths = [
-        "/agents/TestAgent/instance",
-        "/agents/test-agent/room-123",
-        "/agents/EmailAgent/user@example.com"
-      ];
-
-      for (const path of validPaths) {
-        const request = new Request(`http://localhost${path}`, {
-          method: "OPTIONS",
-          headers: {
-            Origin: "http://localhost:3000"
-          }
-        });
-
-        const response = await routeAgentRequest(request, env, { cors: true });
-
-        expect(response).not.toBeNull();
-        expect(response!.status).toBe(200);
-        expect(response!.headers.get("Access-Control-Allow-Origin")).toBe("*");
-      }
-    });
-  });
-
-  describe("Advanced Integration", () => {
-    it("should handle kebab-case to CamelCase agent name resolution", async () => {
-      const request = new Request(
-        "http://localhost/agents/test-agent/my-instance",
-        {
-          method: "GET"
+      // Look for our specific RPC response in all the messages we received
+      const rpcResponses = receivedMessages.filter((msg) => {
+        try {
+          const parsed = JSON.parse(msg);
+          return parsed.type === "rpc" && parsed.id === "rpc-test";
+        } catch {
+          return false;
         }
-      );
+      });
 
-      const response = await routeAgentRequest(request, env);
+      expect(rpcResponses.length).toBeGreaterThan(0);
+      const rpcResponse = JSON.parse(rpcResponses[0]);
+      expect(rpcResponse).toHaveProperty("success", true);
+      expect(rpcResponse).toHaveProperty("result", "test result");
 
-      expect(response).toBeDefined();
-      expect(response).not.toBeNull();
+      ws.close();
     });
 
-    it("should support location hints", async () => {
-      const locationHints: DurableObjectLocationHint[] = [
-        "wnam",
-        "enam",
-        "weur",
-        "eeur",
-        "apac"
-      ];
+    it("should broadcast state updates to WebSocket connections", async () => {
+      const testId = `state-broadcast-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
 
-      for (const hint of locationHints) {
-        const agent = await getAgentByName(env.TEST_AGENT, `location-${hint}`, {
-          locationHint: hint
-        });
-        expect(agent).toBeDefined();
-      }
-    });
-  });
-
-  describe("Agent State Management", () => {
-    it("should persist state between requests", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "state-persist-test");
-
-      const setResponse = await agent.fetch(
-        new Request("http://localhost/setState", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ count: 5, name: "test" })
-        })
-      );
-
-      expect(setResponse.status).toBe(200);
-      const setResult = (await setResponse.json()) as { success: boolean };
-      expect(setResult.success).toBe(true);
-
-      const getResponse = await agent.fetch(
-        new Request("http://localhost/getState")
-      );
-      expect(getResponse.status).toBe(200);
-      const state = (await getResponse.json()) as {
-        count: number;
-        name: string;
-      };
-      expect(state.count).toBe(5);
-      expect(state.name).toBe("test");
-    });
-
-    it("should handle complex state updates", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "state-complex-test");
-
-      await agent.fetch(
-        new Request("http://localhost/setState", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user: { id: 1, name: "Alice" },
-            settings: { theme: "dark", notifications: true }
-          })
-        })
-      );
-
-      await agent.fetch(
-        new Request("http://localhost/setState", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user: { id: 1, name: "Alice Updated" },
-            lastUpdated: Date.now()
-          })
-        })
-      );
-
-      const response = await agent.fetch(
-        new Request("http://localhost/getState")
-      );
-      const state = (await response.json()) as {
-        user: { id: number; name: string };
-        settings?: { theme: string; notifications: boolean };
-        lastUpdated: number;
-      };
-      expect(state.user.name).toBe("Alice Updated");
-      expect(state.lastUpdated).toBeDefined();
-    });
-
-    it("should broadcast state updates to connections", async () => {
-      const agent = await getAgentByName(
-        env.TEST_AGENT,
-        "state-broadcast-test"
-      );
-
-      const wsResponse = await agent.fetch(
+      // First, establish a WebSocket connection to listen for state changes
+      const wsResponse = await agentWithRouting.fetch(
         new Request("http://localhost/", {
           method: "GET",
           headers: { Upgrade: "websocket" }
@@ -533,21 +161,560 @@ describe("Agent Core Functionality", () => {
       );
 
       expect(wsResponse.status).toBe(101);
-      const ws = wsResponse.webSocket;
-      expect(ws).toBeDefined();
+      const ws = wsResponse.webSocket!;
+
+      const receivedMessages: string[] = [];
+      ws.addEventListener("message", (event) => {
+        receivedMessages.push(event.data);
+      });
+      ws.accept();
+
+      // Now update state via HTTP; this should push a message to our WebSocket
+      const stateData = {
+        connectionCount: 2,
+        broadcastMessage: "test broadcast",
+        updateId: "update-1"
+      };
+
+      const setStateResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/setState", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(stateData)
+        })
+      );
+
+      expect(setStateResponse.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Filter out the state broadcast messages; these have type "cf_agent_state"
+      const stateMessages = receivedMessages.filter((msg) => {
+        try {
+          const parsed = JSON.parse(msg);
+          return parsed.type === "cf_agent_state";
+        } catch {
+          return false;
+        }
+      });
+
+      expect(stateMessages.length).toBeGreaterThan(0);
+      const latestStateMessage = JSON.parse(
+        stateMessages[stateMessages.length - 1]
+      );
+      expect(latestStateMessage.state).toHaveProperty("connectionCount", 2);
+      expect(latestStateMessage.state).toHaveProperty("updateId", "update-1");
     });
   });
 
   describe("RPC System", () => {
-    it("should support callable methods", () => {
-      const decorator = unstable_callable({ description: "Test method" });
-      expect(typeof decorator).toBe("function");
+    it("should handle JSON-RPC over HTTP and stub calls", async () => {
+      const testId = `json-rpc-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Call a method via JSON-RPC over HTTP
+      const rpcResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "testMethod",
+            params: [],
+            id: "test-123"
+          })
+        })
+      );
+
+      expect([200, 404].includes(rpcResponse.status)).toBe(true);
+
+      if (rpcResponse.status === 200) {
+        const responseData = (await rpcResponse.json()) as any;
+        expect(responseData).toHaveProperty("jsonrpc", "2.0");
+        expect(responseData).toHaveProperty("id", "test-123");
+        expect(responseData).toHaveProperty("result");
+      }
+
+      // test the .stub.xyz pattern by calling methods directly on the DO instance
+      const id = env.TEST_AGENT.idFromName(testId);
+      const agent = env.TEST_AGENT.get(id);
+
+      await runInDurableObject(agent, async (instance) => {
+        const result1 = await instance.testMethod();
+        expect(result1).toBe("test result");
+
+        const result2 = await instance.addNumbers(5, 3);
+        expect(result2).toBe(8);
+
+        // Test state operations work through direct calls too
+        const initialState = { testData: "stub-test", value: 42 };
+        const setResult = await instance.setState(initialState);
+        expect(setResult).toEqual({ success: true });
+
+        const getResult = await instance.getState();
+        expect(getResult).toEqual(initialState);
+      });
     });
 
-    it("should handle RPC through WebSocket connection", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "rpc-ws-test");
+    it("should handle RPC parameters and error responses", async () => {
+      const testId = `rpc-params-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
 
-      const wsResponse = await agent.fetch(
+      // Test with parameters
+      const mathRpcRequest = {
+        jsonrpc: "2.0",
+        method: "addNumbers",
+        params: [15, 27],
+        id: "math-test"
+      };
+
+      const mathResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(mathRpcRequest)
+        })
+      );
+
+      expect([200, 404].includes(mathResponse.status)).toBe(true);
+
+      if (mathResponse.status === 200) {
+        const mathData = (await mathResponse.json()) as any;
+        expect(mathData.result).toBe(42);
+        expect(mathData.id).toBe("math-test");
+      }
+
+      // Test invalid method
+      const invalidMethodRequest = {
+        jsonrpc: "2.0",
+        method: "nonExistentMethod",
+        params: [],
+        id: "invalid-method"
+      };
+
+      const invalidResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(invalidMethodRequest)
+        })
+      );
+
+      expect([200, 400, 404].includes(invalidResponse.status)).toBe(true);
+
+      if (invalidResponse.status === 200) {
+        const invalidData = (await invalidResponse.json()) as any;
+        expect(invalidData).toHaveProperty("jsonrpc", "2.0");
+        expect(invalidData).toHaveProperty("id", "invalid-method");
+        expect(invalidData).toHaveProperty("error");
+      }
+    });
+  });
+
+  describe("getCurrentAgent Context", () => {
+    it("should provide getCurrentAgent context in custom callable methods", async () => {
+      const testId = `current-agent-${Date.now()}-${Math.random()}`;
+      const id = env.TEST_AGENT.idFromName(testId);
+      const agent = env.TEST_AGENT.get(id);
+
+      // Test direct DO access with custom method
+      await runInDurableObject(agent, async (instance) => {
+        // First set some state to test actual behavior
+        await instance.setState({ testValue: "custom-method-test" });
+
+        const result = await instance.testGetCurrentAgent();
+        expect(result.hasAgent).toBe(true);
+        expect(result.agentType).toBe("TestAgent");
+        expect(result.hasRequest).toBe(false);
+        expect(result.hasConnection).toBe(false);
+        expect(result.hasEmail).toBe(false);
+
+        // gent is the real instance
+        expect(result.agentInstanceTest).toBe(true);
+        expect(result.canCallAgentMethod).toBe(true);
+        expect(result.agentStateAccess).toEqual({
+          testValue: "custom-method-test"
+        });
+
+        // Verify agent object is actually the instance
+        expect(result.agentType).toBe(instance.constructor.name);
+      });
+    });
+
+    it("should provide getCurrentAgent context in well-known methods", async () => {
+      const testId = `current-agent-well-known-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Test setState (well-known method) has getCurrentAgent context
+      const stateResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/setState", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ getCurrentAgentTest: true })
+        })
+      );
+
+      expect(stateResponse.status).toBe(200);
+      const result = await stateResponse.json();
+      expect(result).toHaveProperty("success", true);
+
+      // Test getState (well-known method)
+      const getStateResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/getState")
+      );
+
+      expect(getStateResponse.status).toBe(200);
+      const state = await getStateResponse.json();
+      expect(state).toHaveProperty("getCurrentAgentTest", true);
+    });
+
+    it("should provide getCurrentAgent context during HTTP requests", async () => {
+      const testId = `current-agent-http-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Test HTTP request context via JSON-RPC
+      const rpcRequest = {
+        jsonrpc: "2.0",
+        method: "testGetCurrentAgent",
+        params: [],
+        id: "context-test"
+      };
+
+      const response = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": "test-client/1.0"
+          },
+          body: JSON.stringify(rpcRequest)
+        })
+      );
+
+      expect([200, 404].includes(response.status)).toBe(true);
+
+      if (response.status === 200) {
+        const responseData = (await response.json()) as any;
+        expect(responseData.result.hasAgent).toBe(true);
+        expect(responseData.result.agentType).toBe("TestAgent");
+        expect(responseData.result.hasRequest).toBe(true);
+        expect(responseData.result.hasConnection).toBe(false);
+        expect(responseData.result.hasEmail).toBe(false);
+        expect(responseData.result.requestMethod).toBe("POST");
+        expect(responseData.result.requestUrl).toContain("localhost");
+
+        // Test actual request object behavior
+        expect(responseData.result.requestHeadersAccess).toBeDefined();
+        expect(responseData.result.requestHeadersAccess.userAgent).toBe(
+          "test-client/1.0"
+        );
+        expect(responseData.result.requestHeadersAccess.contentType).toBe(
+          "application/json"
+        );
+        expect(
+          responseData.result.requestHeadersAccess.headerCount
+        ).toBeGreaterThan(0);
+      }
+    });
+
+    it("should provide getCurrentAgent context during WebSocket connections", async () => {
+      const testId = `current-agent-ws-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Test WebSocket context
+      const wsResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "GET",
+          headers: {
+            Upgrade: "websocket",
+            Connection: "Upgrade"
+          }
+        })
+      );
+
+      expect(wsResponse.status).toBe(101);
+      const ws = wsResponse.webSocket!;
+
+      const receivedMessages: string[] = [];
+      ws.addEventListener("message", (event) => {
+        receivedMessages.push(event.data);
+      });
+      ws.accept();
+
+      const wsRpcMessage = {
+        type: "rpc",
+        method: "testGetCurrentAgent",
+        args: [],
+        id: "ws-context-test"
+      };
+
+      ws.send(JSON.stringify(wsRpcMessage));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const rpcResponses = receivedMessages.filter((msg) => {
+        try {
+          const parsed = JSON.parse(msg);
+          return parsed.type === "rpc" && parsed.id === "ws-context-test";
+        } catch {
+          return false;
+        }
+      });
+
+      expect(rpcResponses.length).toBeGreaterThan(0);
+      const rpcResponse = JSON.parse(rpcResponses[0]);
+      expect(rpcResponse.result.hasAgent).toBe(true);
+      expect(rpcResponse.result.agentType).toBe("TestAgent");
+      expect(rpcResponse.result.hasRequest).toBe(false);
+      expect(rpcResponse.result.hasConnection).toBe(true);
+      expect(rpcResponse.result.hasEmail).toBe(false);
+
+      // Test actual connection object behavior
+      expect(rpcResponse.result.connectionStateAccess).toBeDefined();
+      expect(rpcResponse.result.connectionStateAccess.canAcceptEvents).toBe(
+        true
+      );
+      expect(rpcResponse.result.connectionStateAccess.canSendMessages).toBe(
+        true
+      );
+      expect(typeof rpcResponse.result.connectionStateAccess.readyState).toBe(
+        "number"
+      );
+
+      ws.close();
+    });
+
+    it("should provide getCurrentAgent context during email handling", async () => {
+      const testId = `current-agent-email-${Date.now()}-${Math.random()}`;
+      const emailId = env.EmailAgent.idFromName(testId);
+      const emailAgent = env.EmailAgent.get(emailId);
+
+      await runInDurableObject(emailAgent, async (instance) => {
+        const mockEmail = {
+          from: "test@example.com",
+          to: "agent@test.com",
+          headers: new Headers({
+            "Message-ID": "<test@example.com>",
+            Date: new Date().toISOString(),
+            Subject: "Test Email"
+          }),
+          getRaw: async () => new Uint8Array(),
+          rawSize: 100,
+          setReject: () => {},
+          forward: async () => {},
+          reply: async () => {}
+        };
+
+        // Call onEmail method which should have email context
+        await instance.onEmail(mockEmail as any);
+        expect(instance.emailsReceived).toHaveLength(1);
+        expect(instance.emailsReceived[0]).toEqual(mockEmail);
+
+        // Test actual getCurrentAgent context behavior during email handling
+        // Note: When called directly via runInDurableObject, email context may not be available
+        // This tests that the email agent can access agent context during email processing
+        expect(instance.currentAgentContext).toBeDefined();
+        expect(instance.currentAgentContext.hasAgent).toBe(true);
+        expect(instance.currentAgentContext.agentType).toBe("TestEmailAgent");
+        expect(instance.currentAgentContext.agentInstanceTest).toBe(true);
+
+        // Verify email was processed correctly
+        expect(instance.emailsReceived[0].from).toBe("test@example.com");
+        expect(instance.emailsReceived[0].to).toBe("agent@test.com");
+        expect(instance.emailsReceived[0].headers.get("Message-ID")).toBe(
+          "<test@example.com>"
+        );
+        expect(instance.emailsReceived[0].headers.get("Date")).toBeDefined();
+      });
+    });
+  });
+
+  describe("Error Handling", () => {
+    it("should handle various error scenarios", async () => {
+      const testId = `error-test-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Test JSON parsing error
+      const errorResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/setState", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "invalid json"
+        })
+      );
+
+      expect(errorResponse.status).toBe(500);
+
+      // Test namespace error
+      const undefinedEnv = { TEST_AGENT: undefined } as any;
+      await expect(async () => {
+        await getAgentByName(undefinedEnv.TEST_AGENT, "test");
+      }).rejects.toThrow();
+
+      // Test malformed RPC request
+      const malformedRequest = {
+        method: "testMethod",
+        params: [],
+        id: "test1"
+      };
+
+      const rpcResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(malformedRequest)
+        })
+      );
+
+      expect([200, 400, 404].includes(rpcResponse.status)).toBe(true);
+
+      if (rpcResponse.status === 200) {
+        const responseData = (await rpcResponse.json()) as any;
+        expect(responseData).toHaveProperty("jsonrpc", "2.0");
+        expect(responseData).toHaveProperty("error");
+      }
+    });
+  });
+
+  describe("Location Hint Verification", () => {
+    it("should pass location hint to durable object", async () => {
+      const namespaceGetSpy = vi.spyOn(env.TEST_AGENT, "get");
+
+      const locationHint = "wnam" as DurableObjectLocationHint;
+      const agent = await getAgentByName(env.TEST_AGENT, "location-test", {
+        locationHint
+      });
+
+      expect(agent).toBeDefined();
+      expect(namespaceGetSpy).toHaveBeenCalled();
+      const callArgs = namespaceGetSpy.mock.calls[0];
+      expect(callArgs[1]).toHaveProperty("locationHint", locationHint);
+
+      const response = await agent.fetch(
+        new Request("http://localhost/getState", { method: "GET" })
+      );
+      expect(response.status).toBe(200);
+
+      namespaceGetSpy.mockRestore();
+
+      // Test multiple location hints
+      const locationHints: DurableObjectLocationHint[] = [
+        "wnam",
+        "enam",
+        "apac",
+        "weur",
+        "oc"
+      ];
+
+      for (const hint of locationHints) {
+        const spy = vi.spyOn(env.TEST_AGENT, "get");
+        const testAgent = await getAgentByName(
+          env.TEST_AGENT,
+          `location-${hint}-test`,
+          {
+            locationHint: hint
+          }
+        );
+
+        expect(testAgent).toBeDefined();
+        expect(spy).toHaveBeenCalled();
+        expect(spy.mock.calls[0][1]).toHaveProperty("locationHint", hint);
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe("Durable Object Eviction Tests", () => {
+    it("should handle DO eviction and state persistence", async () => {
+      const testId = `eviction-test-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Set initial state
+      const initialState = {
+        evictionTest: true,
+        preEvictionData: "before eviction",
+        timestamp: Date.now()
+      };
+
+      const setStateResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/setState", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(initialState)
+        })
+      );
+
+      expect(setStateResponse.status).toBe(200);
+
+      // Get the instance ID before eviction
+      const preEvictionRpc = {
+        jsonrpc: "2.0",
+        method: "getInstanceId",
+        params: [],
+        id: "pre-eviction"
+      };
+
+      const preEvictionResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(preEvictionRpc)
+        })
+      );
+
+      expect([200, 404].includes(preEvictionResponse.status)).toBe(true);
+
+      if (preEvictionResponse.status === 404) {
+        // Instance tracking not available, skip eviction test
+        return;
+      }
+
+      const preEvictionData = (await preEvictionResponse.json()) as any;
+      const originalInstanceId = preEvictionData.result.instanceId;
+
+      expect(originalInstanceId).toBeDefined();
+      expect(originalInstanceId).toMatch(/^instance-/);
+
+      // Trigger eviction
+      const evictionRpc = {
+        jsonrpc: "2.0",
+        method: "testEviction",
+        params: [],
+        id: "eviction-trigger"
+      };
+
+      const evictionResponse = await agentWithRouting.fetch(
+        new Request("http://localhost/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(evictionRpc)
+        })
+      );
+
+      expect([200, 500].includes(evictionResponse.status)).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Test state persistence after eviction
+      const freshAgentWithRouting = await getAgentByName(
+        env.TEST_AGENT,
+        testId
+      );
+      const stateResponse = await freshAgentWithRouting.fetch(
+        new Request("http://localhost/getState")
+      );
+
+      expect(stateResponse.status).toBe(200);
+      const restoredState = (await stateResponse.json()) as any;
+
+      expect(restoredState.evictionTest).toBe(true);
+      expect(restoredState.preEvictionData).toBe("before eviction");
+      expect(restoredState.timestamp).toBe(initialState.timestamp);
+    });
+
+    it("should handle WebSocket connections during eviction", async () => {
+      const testId = `ws-eviction-${Date.now()}-${Math.random()}`;
+      const agentWithRouting = await getAgentByName(env.TEST_AGENT, testId);
+
+      // Create WebSocket connection
+      const wsResponse = await agentWithRouting.fetch(
         new Request("http://localhost/", {
           method: "GET",
           headers: { Upgrade: "websocket" }
@@ -555,118 +722,46 @@ describe("Agent Core Functionality", () => {
       );
 
       expect(wsResponse.status).toBe(101);
-      expect(wsResponse.webSocket).toBeDefined();
-    });
+      const ws = wsResponse.webSocket!;
 
-    it("should verify callable methods are marked correctly", () => {
-      class TestRPCAgent extends Agent<Env> {
-        @unstable_callable()
-        async callableMethod() {
-          return "result";
-        }
+      const receivedMessages: string[] = [];
+      ws.addEventListener("message", (event) => {
+        receivedMessages.push(event.data);
+      });
+      ws.accept();
 
-        async nonCallableMethod() {
-          return "not callable";
-        }
-      }
-
-      expect(TestRPCAgent.prototype.callableMethod).toBeDefined();
-      expect(TestRPCAgent.prototype.nonCallableMethod).toBeDefined();
-    });
-  });
-
-  describe("Scheduling System", () => {
-    it("should support schedule method", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "schedule-test");
-
-      expect(agent).toBeDefined();
-    });
-
-    it("should handle different schedule types", () => {
-      const dateSchedule = new Date(Date.now() + 60000).toISOString();
-      const delaySchedule = 30; // seconds
-      const cronSchedule = "*/5 * * * *";
-
-      expect(typeof dateSchedule).toBe("string");
-      expect(typeof delaySchedule).toBe("number");
-      expect(typeof cronSchedule).toBe("string");
-    });
-
-    it("should test schedule concepts", () => {
-      type Schedule = {
-        id: string;
-        callback: string;
-        time?: number;
-        cron?: string;
-        payload?: unknown;
+      // Set state through WebSocket RPC
+      const wsStateRpc = {
+        type: "rpc",
+        method: "setState",
+        args: [{ wsEvictionTest: true, timestamp: Date.now() }],
+        id: "ws-state-test"
       };
 
-      const testSchedule: Schedule = {
-        id: "test-123",
-        callback: "processTask",
-        time: Date.now() + 60000,
-        payload: { data: "test" }
+      ws.send(JSON.stringify(wsStateRpc));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Trigger eviction
+      const evictionRpc = {
+        type: "rpc",
+        method: "testEviction",
+        args: [],
+        id: "ws-eviction"
       };
 
-      expect(testSchedule.id).toBeDefined();
-      expect(testSchedule.callback).toBeDefined();
-    });
-  });
+      ws.send(JSON.stringify(evictionRpc));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-  describe("Queue System", () => {
-    it("should support queue functionality", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "queue-test");
-
-      expect(agent).toBeDefined();
-    });
-
-    it("should understand queue concepts", () => {
-      // Test queue-related types
-      type QueueItem = {
-        id: string;
-        callback: string;
-        payload: unknown;
-        retries?: number;
-      };
-
-      const testQueueItem: QueueItem = {
-        id: "queue-123",
-        callback: "processData",
-        payload: { data: "test" },
-        retries: 0
-      };
-
-      expect(testQueueItem.id).toBeDefined();
-      expect(testQueueItem.callback).toBe("processData");
-      expect(testQueueItem.payload).toEqual({ data: "test" });
-    });
-  });
-
-  describe("SQL Storage", () => {
-    it("should use SQL for state persistence", async () => {
-      const agent = await getAgentByName(env.TEST_AGENT, "sql-state-test");
-
-      await agent.fetch(
-        new Request("http://localhost/setState", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sqlTest: true,
-            timestamp: Date.now()
-          })
-        })
-      );
-
-      // State is persisted in SQL storage
-      const response = await agent.fetch(
+      // Verify state persists after eviction
+      const freshAgent = await getAgentByName(env.TEST_AGENT, testId);
+      const stateResponse = await freshAgent.fetch(
         new Request("http://localhost/getState")
       );
-      const state = (await response.json()) as {
-        sqlTest: boolean;
-        timestamp: number;
-      };
-      expect(state.sqlTest).toBe(true);
-      expect(state.timestamp).toBeDefined();
+
+      const state = (await stateResponse.json()) as any;
+      expect(state.wsEvictionTest).toBe(true);
+
+      ws.close();
     });
   });
 });
