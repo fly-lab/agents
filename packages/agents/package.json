@@ -1,7 +1,7 @@
 {
-  "author": "Cloudflare Inc.",
+  "author": "DHN Chandan",
   "bugs": {
-    "url": "https://github.com/cloudflare/agents/issues"
+    "url": "https://github.com/fly-lab/agents/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.1",
@@ -85,14 +85,14 @@
   "keywords": [],
   "license": "MIT",
   "main": "src/index.ts",
-  "name": "agents",
+  "name": "@fly-lab/agents",
   "peerDependencies": {
     "react": "*"
   },
   "repository": {
     "directory": "packages/agents",
     "type": "git",
-    "url": "git+https://github.com/cloudflare/agents.git"
+    "url": "git+https://github.com/fly-lab/agents.git"
   },
   "scripts": {
     "build": "tsx ./scripts/build.ts",
