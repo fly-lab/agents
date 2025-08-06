@@ -68,7 +68,8 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
           // dispatcher,
           // duplex
         } = data.init;
-        const { messages } = JSON.parse(body as string);
+        const { messages: incomingMessages } = JSON.parse(body as string);
+        const messages = [...this.messages, ...incomingMessages];
         this._broadcastChatMessage(
           {
             messages,
@@ -77,8 +78,7 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
           [connection.id]
         );
 
-        const incomingMessages = this._messagesNotAlreadyInAgent(messages);
-        await this.persistMessages(messages, [connection.id]);
+        await this.persistMessages(incomingMessages, [connection.id]);
 
         this.observability?.emit(
           {
@@ -157,7 +157,25 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
         );
       } else if (data.type === "cf_agent_chat_messages") {
         // replace the messages with the new ones
-        await this.persistMessages(data.messages, [connection.id]);
+        this.sql`delete from cf_ai_chat_agent_messages`;
+        this.messages = data.messages; // Set directly since we're replacing everything
+
+        // Persist all messages to DB
+        for (const message of data.messages) {
+          this
+            .sql`insert into cf_ai_chat_agent_messages (id, message) values (${
+            message.id
+          },${JSON.stringify(message)})`;
+        }
+
+        // Broadcast the new message set
+        this._broadcastChatMessage(
+          {
+            messages: this.messages,
+            type: "cf_agent_chat_messages"
+          },
+          [connection.id]
+        );
       } else if (data.type === "cf_agent_chat_request_cancel") {
         // propagate an abort signal for the associated request
         this._cancelChatRequest(data.id);
@@ -173,7 +191,7 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
           this.sql`select * from cf_ai_chat_agent_messages` || []
         ).map((row) => {
           return JSON.parse(row.message as string);
-        });
+        }) as ChatMessage[];
         return Response.json(messages);
       }
       return super.onRequest(request);
@@ -213,11 +231,14 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
     await this.persistMessages(messages);
     const response = await this.onChatMessage(async ({ response }) => {
       const finalMessages = appendResponseMessages({
-        messages,
+        messages: this.messages, // Use current state instead of input messages
         responseMessages: response.messages
       });
 
-      await this.persistMessages(finalMessages, []);
+      // Only persist the new response messages (filter out existing ones)
+      const newResponseMessages =
+        this._messagesNotAlreadyInAgent(finalMessages);
+      await this.persistMessages(newResponseMessages, []);
     });
     if (response) {
       // we're just going to drain the body
@@ -233,16 +254,21 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
     messages: ChatMessage[],
     excludeBroadcastIds: string[] = []
   ) {
-    this.sql`delete from cf_ai_chat_agent_messages`;
     for (const message of messages) {
-      this.sql`insert into cf_ai_chat_agent_messages (id, message) values (${
+      this
+        .sql`insert or replace into cf_ai_chat_agent_messages (id, message) values (${
         message.id
       },${JSON.stringify(message)})`;
     }
-    this.messages = messages;
+
+    // Update in-memory messages by merging new messages
+    const existingIds = new Set(this.messages.map((m) => m.id));
+    const newMessages = messages.filter((m) => !existingIds.has(m.id));
+    this.messages = [...this.messages, ...newMessages];
+
     this._broadcastChatMessage(
       {
-        messages: messages,
+        messages: this.messages, // Broadcast all messages, not just the new ones
         type: "cf_agent_chat_messages"
       },
       excludeBroadcastIds

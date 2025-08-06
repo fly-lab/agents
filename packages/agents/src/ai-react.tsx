@@ -220,6 +220,13 @@ export function useAgentChat<State = unknown>(
     fetch: aiFetch,
     initialMessages,
     sendExtraMessageFields: true,
+    // only send the last message to the server:
+    experimental_prepareRequestBody({ messages, id }) {
+      return {
+        message: messages.length ? [messages.at(-1)] : [],
+        id
+      };
+    },
     ...rest
   });
 
