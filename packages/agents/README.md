@@ -2,6 +2,10 @@
 
 ![agents-header](https://github.com/user-attachments/assets/f6d99eeb-1803-4495-9c5e-3cf07a37b402)
 
+> **🚀 Performance Optimization Notice**
+>
+> This is a forked version from Cloudflare agents, **optimized for sending last message from client and persisting only last messages in the database**. In the main Cloudflare package, on every message it is deleting all messages and then persisting again. **This creates extra SQL reads and writes**. Our fork eliminates these unnecessary operations for better performance.
+
 Welcome to a new chapter in software development, where AI agents persist, think, and act with purpose. The `agents` framework creates an environment where artificial intelligence can flourish - maintaining state, engaging in meaningful interactions, and evolving over time.
 
 _This project is in active development. Join us in shaping the future of intelligent agents._
