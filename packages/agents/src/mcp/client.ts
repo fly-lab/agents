@@ -199,12 +199,14 @@ export class MCPClientManager {
                 serverId: tool.serverId
               });
               if (result.isError) {
-                // @ts-expect-error TODO we should fix this
-                throw new Error(result.content[0].text);
+                throw new Error(
+                  (result.content as unknown as { text: string }[])[0]?.text ||
+                    "Tool execution failed"
+                );
               }
               return result;
             },
-            parameters: jsonSchema(tool.inputSchema)
+            inputSchema: jsonSchema(tool.inputSchema)
           }
         ];
       })
