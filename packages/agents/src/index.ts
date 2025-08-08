@@ -2,6 +2,7 @@ import type { env } from "cloudflare:workers";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
+import { DOQB } from "workers-qb";
 
 import type {
   Prompt,
@@ -26,6 +27,7 @@ import { MCPClientManager } from "./mcp/client";
 // import type { MCPClientConnection } from "./mcp/client-connection";
 import { DurableObjectOAuthClientProvider } from "./mcp/do-oauth-client-provider";
 import { genericObservability, type Observability } from "./observability";
+import { migrations } from "./migrations";
 
 export type { Connection, ConnectionContext, WSMessage } from "partyserver";
 
@@ -298,6 +300,8 @@ export class Agent<Env = typeof env, State = unknown> extends Server<Env> {
    */
   initialState: State = DEFAULT_STATE as State;
 
+  #qb: DOQB;
+
   /**
    * Current state of the Agent
    */
@@ -308,21 +312,25 @@ export class Agent<Env = typeof env, State = unknown> extends Server<Env> {
     }
     // looks like this is the first time the state is being accessed
     // check if the state was set in a previous life
-    const wasChanged = this.sql<{ state: "true" | undefined }>`
-        SELECT state FROM cf_agents_state WHERE id = ${STATE_WAS_CHANGED}
-      `;
+    const wasChanged = this.#qb
+      .select<{ state: "true" | undefined }>("state")
+      .tableName("cf_agents_state")
+      .where("id", STATE_WAS_CHANGED)
+      .execute().results;
 
     // ok, let's pick up the actual state from the db
-    const result = this.sql<{ state: State | undefined }>`
-      SELECT state FROM cf_agents_state WHERE id = ${STATE_ROW_ID}
-    `;
+    const result = this.#qb
+      .select<{ state: State | undefined }>("state")
+      .tableName("cf_agents_state")
+      .where("id", STATE_ROW_ID)
+      .execute().results;
 
     if (
-      wasChanged[0]?.state === "true" ||
+      (wasChanged && wasChanged[0]?.state === "true") ||
       // we do this check for people who updated their code before we shipped wasChanged
-      result[0]?.state
+      result?.[0]?.state
     ) {
-      const state = result[0]?.state as string; // could be null?
+      const state = result?.[0]?.state as string; // could be null?
 
       this._state = JSON.parse(state);
       return this._state;
@@ -383,57 +391,20 @@ export class Agent<Env = typeof env, State = unknown> extends Server<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
 
+    this.#qb = new DOQB(this.ctx.storage.sql);
+
     // Auto-wrap custom methods with agent context
     this._autoWrapCustomMethods();
 
-    this.sql`
-      CREATE TABLE IF NOT EXISTS cf_agents_state (
-        id TEXT PRIMARY KEY NOT NULL,
-        state TEXT
-      )
-    `;
-
-    this.sql`
-      CREATE TABLE IF NOT EXISTS cf_agents_queues (
-        id TEXT PRIMARY KEY NOT NULL,
-        payload TEXT,
-        callback TEXT,
-        created_at INTEGER DEFAULT (unixepoch())
-      )
-    `;
-
     void this.ctx.blockConcurrencyWhile(async () => {
       return this._tryCatch(async () => {
-        // Create alarms table if it doesn't exist
-        this.sql`
-        CREATE TABLE IF NOT EXISTS cf_agents_schedules (
-          id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
-          callback TEXT,
-          payload TEXT,
-          type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed', 'cron')),
-          time INTEGER,
-          delayInSeconds INTEGER,
-          cron TEXT,
-          created_at INTEGER DEFAULT (unixepoch())
-        )
-      `;
+        const migrationBuilder = this.#qb.migrations({ migrations });
+        migrationBuilder.apply();
 
         // execute any pending alarms and schedule the next alarm
         await this.alarm();
       });
     });
-
-    this.sql`
-      CREATE TABLE IF NOT EXISTS cf_agents_mcp_servers (
-        id TEXT PRIMARY KEY NOT NULL,
-        name TEXT NOT NULL,
-        server_url TEXT NOT NULL,
-        callback_url TEXT NOT NULL,
-        client_id TEXT,
-        auth_url TEXT,
-        server_options TEXT
-      )
-    `;
 
     const _onRequest = this.onRequest.bind(this);
     this.onRequest = (request: Request) => {
