@@ -117,6 +117,7 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
           };
 
           const onFinish: StreamTextOnFinishCallback<ToolSet> = async ({
+            // biome-ignore lint/correctness/noUnusedFunctionParameters: callback may be used by implementing classes
             response
           }) => {
             // This is called when streamText completes
@@ -239,6 +240,7 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
       await this.persistMessages(finalMessages, []);
     };
     const onFinish: StreamTextOnFinishCallback<ToolSet> = async ({
+      // biome-ignore lint/correctness/noUnusedFunctionParameters: callback may be used by implementing classes
       response
     }) => {
       // This is called when streamText completes
