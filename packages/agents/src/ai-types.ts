@@ -1,5 +1,7 @@
 import type { Message as ChatMessage } from "ai";
 
+import type { Agent } from ".";
+
 /**
  * Types of messages sent from the Agent to clients
  */
@@ -71,3 +73,42 @@ export type IncomingMessage =
       type: "cf_agent_chat_request_cancel";
       id: string;
     };
+
+export type AgentState<State = unknown> = {
+  id: string;
+  state: State;
+};
+
+export type AgentQueue<T = unknown> = {
+  id: string;
+  payload: T;
+  callback: keyof Agent<unknown>;
+  created_at: number;
+};
+
+export type AgentSchedule<T = unknown> = {
+  id: string;
+  callback: keyof Agent<unknown>;
+  payload: T;
+  type: "scheduled" | "delayed" | "cron";
+  time: number;
+  delayInSeconds: number;
+  cron: string;
+  created_at: number;
+};
+
+export type AgentMcpServer = {
+  id: string;
+  name: string;
+  server_url: string;
+  callback_url: string;
+  client_id: string | null;
+  auth_url: string | null;
+  server_options: string;
+};
+
+export type AIChatAgentMessage = {
+  id: string;
+  message: string;
+  created_at: number;
+};

@@ -4,8 +4,13 @@ import type {
   ToolSet
 } from "ai";
 import { appendResponseMessages } from "ai";
+import { DOQB } from "workers-qb";
 import { Agent, type AgentContext, type Connection, type WSMessage } from "./";
-import type { IncomingMessage, OutgoingMessage } from "./ai-types";
+import type {
+  AIChatAgentMessage,
+  IncomingMessage,
+  OutgoingMessage
+} from "./ai-types";
 
 const decoder = new TextDecoder();
 
@@ -24,16 +29,21 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
   private _chatMessageAbortControllers: Map<string, AbortController>;
   /** Array of chat messages for the current conversation */
   messages: ChatMessage[];
+
+  #qb: DOQB;
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
-    this.sql`create table if not exists cf_ai_chat_agent_messages (
-      id text primary key,
-      message text not null,
-      created_at datetime default current_timestamp
-    )`;
-    this.messages = (
-      this.sql`select * from cf_ai_chat_agent_messages` || []
-    ).map((row) => {
+
+    this.#qb = new DOQB(this.ctx.storage.sql);
+
+    const allMessages = this.#qb
+      .fetchAll<AIChatAgentMessage>({
+        tableName: "cf_ai_chat_agent_messages"
+      })
+      .execute();
+
+    this.messages = (allMessages.results || []).map((row) => {
       return JSON.parse(row.message as string);
     });
 
@@ -147,7 +157,12 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
       }
       if (data.type === "cf_agent_chat_clear") {
         this._destroyAbortControllers();
-        this.sql`delete from cf_ai_chat_agent_messages`;
+        this.#qb
+          .delete({
+            tableName: "cf_ai_chat_agent_messages",
+            where: { conditions: "1=1" }
+          })
+          .execute();
         this.messages = [];
         this._broadcastChatMessage(
           {
@@ -157,7 +172,12 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
         );
       } else if (data.type === "cf_agent_chat_messages") {
         // replace the messages with the new ones
-        this.sql`delete from cf_ai_chat_agent_messages`;
+        this.#qb
+          .delete({
+            tableName: "cf_ai_chat_agent_messages",
+            where: { conditions: "1=1" }
+          })
+          .execute();
         this.messages = data.messages; // Set directly since we're replacing everything
 
         // Persist all messages to DB
@@ -187,11 +207,13 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
     return this._tryCatchChat(() => {
       const url = new URL(request.url);
       if (url.pathname.endsWith("/get-messages")) {
-        const messages = (
-          this.sql`select * from cf_ai_chat_agent_messages` || []
-        ).map((row) => {
-          return JSON.parse(row.message as string);
-        }) as ChatMessage[];
+        const messages = this.#qb
+          .select("*")
+          .tableName("cf_ai_chat_agent_messages")
+          .execute()
+          .results?.map((row) => {
+            return JSON.parse(row.message as string);
+          }) as ChatMessage[];
         return Response.json(messages);
       }
       return super.onRequest(request);
