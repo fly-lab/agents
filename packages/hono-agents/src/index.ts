@@ -1,5 +1,5 @@
-import type { AgentOptions } from "agents";
-import { routeAgentRequest } from "agents";
+import type { AgentOptions } from "@fly-lab/agents";
+import { routeAgentRequest } from "@fly-lab/agents";
 import type { Context, Env } from "hono";
 import { env } from "hono/adapter";
 import { createMiddleware } from "hono/factory";
