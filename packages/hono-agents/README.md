@@ -4,18 +4,28 @@
 
 Add intelligent, stateful AI agents to your Hono app. Create persistent AI agents that can think, communicate, and evolve over time, all integrated seamlessly with your Hono application.
 
+> **🚀 Performance Optimization Notice**
+>
+> This is a forked version from Cloudflare agents, **optimized for sending last message from client and persisting only last messages in the database**. In the main Cloudflare package, on every message it is deleting all messages and then persisting again. **This creates extra SQL reads and writes**. Our fork eliminates these unnecessary operations for better performance.
+
+## Updates
+
+- Sending last message from client
+- Persisting last message in database to save SQL writes
+- Using Vercel AI SDK version 5
+
 ## Installation
 
 ```bash
-npm install agents hono hono-agents
+npm install @fly-lab/agents hono @fly-lab/hono-agents
 ```
 
 ## Usage
 
 ```ts
 import { Hono } from "hono";
-import { Agent } from "agents";
-import { agentsMiddleware } from "hono-agents";
+import { Agent } from "@fly-lab/agents";
+import { agentsMiddleware } from "@fly-lab/hono-agents";
 
 // Define your agent classes
 export class ChatAgent extends Agent {
