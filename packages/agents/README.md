@@ -1,10 +1,14 @@
-### 🧠 `agents` - A Framework for Digital Intelligence
-
-![agents-header](https://github.com/user-attachments/assets/f6d99eeb-1803-4495-9c5e-3cf07a37b402)
+## 🧠 `agents` - A Framework for Digital Intelligence
 
 > **🚀 Performance Optimization Notice**
 >
 > This is a forked version from Cloudflare agents, **optimized for sending last message from client and persisting only last messages in the database**. In the main Cloudflare package, on every message it is deleting all messages and then persisting again. **This creates extra SQL reads and writes**. Our fork eliminates these unnecessary operations for better performance.
+
+### Updates
+
+- Sending last message from client
+- Persisting last message in database to save SQL writes
+- Using Vercel AI SDK version 5
 
 Welcome to a new chapter in software development, where AI agents persist, think, and act with purpose. The `agents` framework creates an environment where artificial intelligence can flourish - maintaining state, engaging in meaningful interactions, and evolving over time.
 
@@ -37,10 +41,10 @@ Start with a complete environment:
 
 ```sh
 # Create a new project
-npm create cloudflare@latest -- --template cloudflare/agents-starter
+npm create cloudflare@latest
 
 # Or enhance an existing one
-npm install agents
+npm install @fly-lab/agents
 ```
 
 ### 📝 Your First Agent
@@ -48,7 +52,7 @@ npm install agents
 Create an agent that bridges thought and action:
 
 ```ts
-import { Agent } from "agents";
+import { Agent } from "@fly-lab/agents";
 
 export class IntelligentAgent extends Agent {
   async onRequest(request) {
@@ -63,7 +67,7 @@ export class IntelligentAgent extends Agent {
 Agents can manifest various forms of understanding:
 
 ```ts
-import { Agent } from "agents";
+import { Agent } from "@fly-lab/agents";
 import { OpenAI } from "openai";
 
 export class AIAgent extends Agent {
@@ -175,7 +179,7 @@ export class DialogueAgent extends Agent {
 For direct connection to your agent:
 
 ```ts
-import { AgentClient } from "agents/client";
+import { AgentClient } from "@fly-lab/agents/client";
 
 const connection = new AgentClient({
   agent: "dialogue-agent",
@@ -199,7 +203,7 @@ connection.send(
 For harmonious integration with React:
 
 ```tsx
-import { useAgent } from "agents/react";
+import { useAgent } from "@fly-lab/agents/react";
 
 function AgentInterface() {
   const connection = useAgent({
@@ -256,7 +260,7 @@ Connect to your agent's state from React:
 
 ```tsx
 import { useState } from "react";
-import { useAgent } from "agents/react";
+import { useAgent } from "@fly-lab/agents/react";
 
 function StateInterface() {
   const [state, setState] = useState({ counter: 0 });
@@ -319,7 +323,7 @@ export class TimeAwareAgent extends Agent {
 Create meaningful conversations with intelligence:
 
 ```ts
-import { AIChatAgent } from "agents/ai-chat-agent";
+import { AIChatAgent } from "@fly-lab/agents/ai-chat-agent";
 import { openai } from "@ai-sdk/openai";
 
 export class DialogueAgent extends AIChatAgent {
@@ -344,8 +348,9 @@ export class DialogueAgent extends AIChatAgent {
 Connect with your agent through a React interface:
 
 ```tsx
-import { useAgent } from "agents/react";
-import { useAgentChat } from "agents/ai-react";
+import { useState } from "react";
+import { useAgent } from "@fly-lab/agents/react";
+import { useAgentChat } from "@fly-lab/agents/ai-react";
 
 function ChatInterface() {
   // Connect to the agent
@@ -354,33 +359,54 @@ function ChatInterface() {
   });
 
   // Set up the chat interaction
-  const { messages, input, handleInputChange, handleSubmit, clearHistory } =
-    useAgentChat({
-      agent,
-      maxSteps: 5
-    });
+  const { messages, sendMessage, status, clearHistory, stop } = useAgentChat({
+    agent
+  });
+
+  const [input, setInput] = useState("");
 
   return (
-    <div className="chat-interface">
+    <div>
       {/* Message History */}
-      <div className="message-flow">
-        {messages.map((message) => (
-          <div key={message.id} className="message">
-            <div className="role">{message.role}</div>
-            <div className="content">{message.content}</div>
+      <div>
+        {messages.map((message, index) => (
+          <div key={message.id}>
+            ({index + 1}){message.role === "user" ? "User: " : "AI: "}
+            {message.parts.map((part, index) =>
+              part.type === "text" ? <span key={index}>{part.text}</span> : null
+            )}
           </div>
         ))}
       </div>
 
       {/* Input Area */}
-      <form onSubmit={handleSubmit} className="input-area">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (input.trim()) {
+            sendMessage({ text: input });
+            setInput("");
+          }
+        }}
+      >
         <input
           value={input}
-          onChange={handleInputChange}
-          placeholder="Type your message..."
-          className="message-input"
+          onChange={(e) => setInput(e.target.value)}
+          disabled={status !== "ready"}
+          placeholder="Say something..."
         />
+        <button type="submit" disabled={status !== "ready"}>
+          Submit
+        </button>
       </form>
+
+      {(status === "submitted" || status === "streaming") && (
+        <div>
+          <button type="button" onClick={() => stop()}>
+            Stop
+          </button>
+        </div>
+      )}
 
       <button onClick={clearHistory} className="clear-button">
         Clear Chat
@@ -405,7 +431,7 @@ Agents can seamlessly integrate with the Model Context Protocol, allowing them t
 
 ```typescript
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { McpAgent } from "agents/mcp";
+import { McpAgent } from "@fly-lab/agents/mcp";
 import { z } from "zod";
 
 type Env = {
@@ -467,7 +493,7 @@ export default MyMCP.serve("/mcp", {
 #### Using MCP Tools
 
 ```typescript
-import { MCPClientManager } from "agents/mcp";
+import { MCPClientManager } from "@fly-lab/agents/mcp";
 
 const client = new MCPClientManager("my-app", "1.0.0");
 
