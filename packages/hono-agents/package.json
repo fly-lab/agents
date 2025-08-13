@@ -5,8 +5,8 @@
   },
   "description": "Add Cloudflare Agents to your Hono app",
   "devDependencies": {
-    "agents": "^0.0.111",
-    "hono": "^4.8.12"
+    "@fly-lab/agents": "^0.1.4",
+    "hono": "^4.9.1"
   },
   "publishConfig": {
     "access": "public"
@@ -31,8 +31,8 @@
   "main": "src/index.ts",
   "name": "@fly-lab/hono-agents",
   "peerDependencies": {
-    "agents": "^0.0.111",
-    "hono": "^4.6.17"
+    "@fly-lab/agents": "^0.1.4",
+    "hono": "^4.9.1"
   },
   "repository": {
     "directory": "packages/hono-agents",
