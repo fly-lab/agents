@@ -72,7 +72,7 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
           ? parsedBody.messages
           : Array.isArray(parsedBody.message)
             ? parsedBody.message
-            : [];
+            : [parsedBody.message];
         const messages = [...this.messages, ...incomingMessages];
         this._broadcastChatMessage(
           {
@@ -269,16 +269,28 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
     messages: ChatMessage[],
     excludeBroadcastIds: string[] = []
   ) {
+    const processedMessages: ChatMessage[] = [];
+
     for (const message of messages) {
-      this
-        .sql`insert or replace into cf_ai_chat_agent_messages (id, message) values (${
-        message.id
-      },${JSON.stringify(message)})`;
+      let messageId = message.id;
+      if (!messageId) {
+        messageId = crypto.randomUUID();
+        message.id = messageId;
+      }
+      if (messageId) {
+        this.sql`
+          INSERT INTO cf_ai_chat_agent_messages (id, message)
+          VALUES (${messageId}, ${JSON.stringify(message)})
+          ON CONFLICT(id) DO NOTHING
+          `;
+
+        processedMessages.push(message);
+      }
     }
 
     // Update in-memory messages by merging new messages
     const existingIds = new Set(this.messages.map((m) => m.id));
-    const newMessages = messages.filter((m) => !existingIds.has(m.id));
+    const newMessages = processedMessages.filter((m) => !existingIds.has(m.id));
     this.messages = [...this.messages, ...newMessages];
 
     this._broadcastChatMessage(
