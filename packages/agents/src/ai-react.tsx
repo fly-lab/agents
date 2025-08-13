@@ -1,8 +1,9 @@
-import { useChat, type Message } from "@ai-sdk/react";
+import { useChat, type UIMessage as Message } from "@ai-sdk/react";
 import { nanoid } from "nanoid";
 import { use, useEffect } from "react";
 import type { OutgoingMessage } from "./ai-types";
 import type { useAgent } from "./react";
+import { DefaultChatTransport } from "ai";
 
 type GetInitialMessagesOptions = {
   agent: string;
@@ -34,7 +35,10 @@ const requestCache = new Map<string, Promise<Message[]>>();
  * @returns Chat interface controls and state with added clearHistory method
  */
 export function useAgentChat<State = unknown>(
-  options: UseAgentChatOptions<State>
+  options: UseAgentChatOptions<State> & {
+    credentials?: RequestInit["credentials"];
+    headers?: RequestInit["headers"];
+  }
 ) {
   const { agent, getInitialMessages, ...rest } = options;
 
@@ -88,7 +92,7 @@ export function useAgentChat<State = unknown>(
         });
   const initialMessages = initialMessagesPromise
     ? use(initialMessagesPromise)
-    : (rest.initialMessages ?? []);
+    : [];
 
   // manages adding and removing the promise from the cache
   useEffect(() => {
@@ -216,16 +220,15 @@ export function useAgentChat<State = unknown>(
     return new Response(stream);
   }
   const useChatHelpers = useChat({
-    fetch: aiFetch,
-    initialMessages,
-    sendExtraMessageFields: true,
-    // only send the last message to the server:
-    experimental_prepareRequestBody({ messages, id }) {
-      return {
-        message: messages.length ? [messages.at(-1)] : [],
-        id
-      };
-    },
+    messages: initialMessages,
+    // sendExtraMessageFields: true,
+    transport: new DefaultChatTransport({
+      fetch: aiFetch,
+      prepareSendMessagesRequest({ messages, id }) {
+        return { body: { message: messages[messages.length - 1], id } };
+      },
+      api: agentUrlString
+    }),
     ...rest
   });
 
