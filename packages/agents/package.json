@@ -4,6 +4,7 @@
     "url": "https://github.com/fly-lab/agents/issues"
   },
   "dependencies": {
+    "@ai-sdk/react": "^2.0.11",
     "@modelcontextprotocol/sdk": "^1.17.2",
     "ai": "^5.0.8",
     "cron-schedule": "^5.0.4",
@@ -106,5 +107,5 @@
   },
   "type": "module",
   "types": "dist/index.d.ts",
-  "version": "0.1.0"
+  "version": "0.1.1"
 }
