@@ -27,9 +27,6 @@ async function main() {
     splitting: true
   });
 
-  // then run prettier on the generated .d.ts files
-  execSync("prettier --write ./dist/*.d.ts");
-
   process.exit(0);
 }
 
