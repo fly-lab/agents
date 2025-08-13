@@ -67,7 +67,12 @@ export class AIChatAgent<Env = unknown, State = unknown> extends Agent<
           // dispatcher,
           // duplex
         } = data.init;
-        const { messages: incomingMessages } = JSON.parse(body as string);
+        const parsedBody = JSON.parse(body as string);
+        const incomingMessages = Array.isArray(parsedBody.messages)
+          ? parsedBody.messages
+          : Array.isArray(parsedBody.message)
+            ? parsedBody.message
+            : [];
         const messages = [...this.messages, ...incomingMessages];
         this._broadcastChatMessage(
           {
