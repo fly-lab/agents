@@ -1,7 +1,7 @@
 {
-  "author": "Cloudflare Inc.",
+  "author": "DHN Chandan",
   "bugs": {
-    "url": "https://github.com/cloudflare/agents/issues"
+    "url": "https://github.com/fly-lab/agents/issues"
   },
   "description": "Add Cloudflare Agents to your Hono app",
   "devDependencies": {
@@ -29,7 +29,7 @@
   ],
   "license": "MIT",
   "main": "src/index.ts",
-  "name": "hono-agents",
+  "name": "@fly-lab/hono-agents",
   "peerDependencies": {
     "agents": "^0.0.111",
     "hono": "^4.6.17"
@@ -37,7 +37,7 @@
   "repository": {
     "directory": "packages/hono-agents",
     "type": "git",
-    "url": "git+https://github.com/cloudflare/agents.git"
+    "url": "git+https://github.com/fly-lab/agents.git"
   },
   "scripts": {
     "build": "tsx ./scripts/build.ts",
