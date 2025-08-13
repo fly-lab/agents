@@ -39,7 +39,9 @@ export function useAgentChat<State = unknown>(
     credentials?: RequestInit["credentials"];
     headers?: RequestInit["headers"];
   }
-) {
+): ReturnType<typeof useChat> & {
+  clearHistory: () => void;
+} {
   const { agent, getInitialMessages, ...rest } = options;
 
   const agentUrl = new URL(
@@ -286,19 +288,6 @@ export function useAgentChat<State = unknown>(
       agent.send(
         JSON.stringify({
           type: "cf_agent_chat_clear"
-        })
-      );
-    },
-    /**
-     * Set the chat messages and synchronize with the Agent
-     * @param messages New messages to set
-     */
-    setMessages: (messages: Message[]) => {
-      useChatHelpers.setMessages(messages);
-      agent.send(
-        JSON.stringify({
-          messages,
-          type: "cf_agent_chat_messages"
         })
       );
     }
